@@ -1,0 +1,41 @@
+{
+  "name": "ae2i-algerie-website",
+  "version": "1.0.0",
+  "description": "Site web professionnel pour AE2I Algérie - Solutions d'ingénierie et services industriels",
+  "main": "public/index.html",
+  "scripts": {
+    "start": "firebase serve --only hosting",
+    "deploy:firebase": "firebase deploy",
+    "deploy:hosting": "firebase deploy --only hosting",
+    "deploy:rules": "firebase deploy --only firestore:rules,storage:rules",
+    "deploy:cloudflare": "wrangler publish",
+    "build": "echo 'No build step required - static site'",
+    "test": "echo 'No tests configured'",
+    "serve": "firebase serve",
+    "emulators": "firebase emulators:start"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/votre-username/ae2i-algerie.git"
+  },
+  "keywords": [
+    "ae2i",
+    "algerie",
+    "ingenierie",
+    "industrie",
+    "energie",
+    "website",
+    "firebase",
+    "cloudflare"
+  ],
+  "author": "AE2I Algérie",
+  "license": "UNLICENSED",
+  "private": true,
+  "devDependencies": {
+    "firebase-tools": "^13.0.0"
+  },
+  "engines": {
+    "node": ">=14.0.0",
+    "npm": ">=6.0.0"
+  }
+}

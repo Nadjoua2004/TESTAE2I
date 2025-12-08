@@ -1,0 +1,111 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() &&
+             get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+
+    function isRecruiter() {
+      return isAuthenticated() &&
+             (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'recruiter' ||
+              get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin');
+    }
+
+    function isReader() {
+      return isAuthenticated() &&
+             (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'reader' ||
+              get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'recruiter' ||
+              get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin');
+    }
+
+    // Users collection - Admin only
+    match /users/{userId} {
+      allow read: if isAuthenticated();
+      allow create, update, delete: if isAdmin();
+    }
+
+    // Site settings - Admin only
+    match /settings/{document=**} {
+      allow read: if true; // Public read for site display
+      allow write: if isAdmin();
+    }
+
+    // Services - Admin can write, everyone can read
+    match /services/{serviceId} {
+      allow read: if true;
+      allow create, update, delete: if isAdmin();
+    }
+
+    // Jobs - Admin and Recruiter can write, everyone can read
+    match /jobs/{jobId} {
+      allow read: if true;
+      allow create, update, delete: if isRecruiter();
+    }
+
+    // CV Database - Recruiter and Admin can read/write
+    match /cvDatabase/{cvId} {
+      allow read: if isReader();
+      allow create: if true; // Anyone can submit a CV
+      allow update, delete: if isRecruiter();
+    }
+
+    // Contact Messages - Admin can read/write, anyone can create
+    match /contactMessages/{messageId} {
+      allow read: if isReader();
+      allow create: if true; // Anyone can send a message
+      allow update, delete: if isAdmin();
+    }
+
+    // Clients - Admin can write, everyone can read
+    match /clients/{clientId} {
+      allow read: if true;
+      allow create, update, delete: if isAdmin();
+    }
+
+    // Testimonials - Admin can write, everyone can read
+    match /testimonials/{testimonialId} {
+      allow read: if true;
+      allow create, update, delete: if isAdmin();
+    }
+
+    // Custom Pages - Admin can write, everyone can read
+    match /customPages/{pageId} {
+      allow read: if true;
+      allow create, update, delete: if isAdmin();
+    }
+
+    // Consent Logs - Anyone can create, Admin can read
+    match /consentLogs/{logId} {
+      allow read: if isAdmin();
+      allow create: if true;
+      allow update, delete: if false;
+    }
+
+    // GDPR Requests - Anyone can create, Admin can read/update
+    match /gdprRequests/{requestId} {
+      allow read, update: if isAdmin();
+      allow create: if true;
+      allow delete: if false;
+    }
+
+    // Activity Log - Admin only
+    match /activityLog/{logId} {
+      allow read: if isAdmin();
+      allow create: if isAuthenticated();
+      allow update, delete: if false;
+    }
+
+    // Trash - Admin only
+    match /trash/{trashId} {
+      allow read, update, delete: if isAdmin();
+      allow create: if isAuthenticated();
+    }
+  }
+}

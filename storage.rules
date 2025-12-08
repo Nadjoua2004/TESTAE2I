@@ -1,0 +1,88 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() &&
+             firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+
+    function isRecruiter() {
+      return isAuthenticated() &&
+             (firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.role == 'recruiter' ||
+              firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.role == 'admin');
+    }
+
+    // Valid file types
+    function isValidImageType() {
+      return request.resource.contentType.matches('image/.*');
+    }
+
+    function isValidVideoType() {
+      return request.resource.contentType.matches('video/.*');
+    }
+
+    function isValidPDFType() {
+      return request.resource.contentType == 'application/pdf';
+    }
+
+    function isValidDocumentType() {
+      return request.resource.contentType.matches('application/(pdf|msword|vnd.openxmlformats-officedocument.wordprocessingml.document)');
+    }
+
+    // File size limits
+    function isUnder10MB() {
+      return request.resource.size < 10 * 1024 * 1024;
+    }
+
+    function isUnder50MB() {
+      return request.resource.size < 50 * 1024 * 1024;
+    }
+
+    function isUnder100MB() {
+      return request.resource.size < 100 * 1024 * 1024;
+    }
+
+    // Public read access for all uploads (site assets)
+    match /uploads/{allPaths=**} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // Photos - Admin only upload, everyone can read
+    match /uploads/photos/{photoId} {
+      allow read: if true;
+      allow write: if isAdmin() && isValidImageType() && isUnder10MB();
+    }
+
+    // Client logos - Admin only upload, everyone can read
+    match /uploads/photos/clients/{clientLogo} {
+      allow read: if true;
+      allow write: if isAdmin() && isValidImageType() && isUnder10MB();
+    }
+
+    // Videos - Admin only upload, everyone can read
+    match /uploads/videos/{videoId} {
+      allow read: if true;
+      allow write: if isAdmin() && isValidVideoType() && isUnder100MB();
+    }
+
+    // Brochures - Admin only upload, everyone can read
+    match /uploads/brochures/{brochureId} {
+      allow read: if true;
+      allow write: if isAdmin() && isValidPDFType() && isUnder50MB();
+    }
+
+    // CVs - Anyone can upload, Recruiter and Admin can read
+    match /cvs/{cvId} {
+      allow read: if isRecruiter();
+      allow create: if isValidDocumentType() && isUnder10MB();
+      allow update, delete: if isRecruiter();
+    }
+  }
+}

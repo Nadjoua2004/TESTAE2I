@@ -46,6 +46,11 @@ const firebaseConfig = {
     appId: "1:952653537004:web:7943230cdf74baa16a4fc9",
     measurementId: "G-WTYQ12916Z" // Optionnel
 };
+const R2_CONFIG = {
+    accountId: '298ee83d49284d7cc8b8c2eac280bf44',
+    bucketName: 'ae2i-cvs-algerie',
+    workerUrl: 'https://upload-ae2i.ae2ialgerie2025.workers.dev' 
+};
 
 // Initialiser Firebase
 const app = initializeApp(firebaseConfig);
@@ -234,63 +239,98 @@ class FirebaseHelper {
         });
     }
 
-    // STORAGE HELPERS
-    async uploadFile(path, file, onProgress = null) {
-        try {
-            const storageRef = ref(this.storage, path);
+// === CLOUDFLARE R2 CONFIGURATION ===
 
-            if (onProgress) {
-                const uploadTask = uploadBytesResumable(storageRef, file);
 
-                return new Promise((resolve, reject) => {
-                    uploadTask.on('state_changed',
-                        (snapshot) => {
-                            const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
-                            onProgress(progress);
-                        },
-                        (error) => {
-                            console.error('Upload error:', error);
-                            reject({ success: false, error: error.message });
-                        },
-                        async () => {
-                            const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
-                            resolve({ success: true, url: downloadURL });
-                        }
-                    );
-                });
-            } else {
-                const snapshot = await uploadBytes(storageRef, file);
-                const downloadURL = await getDownloadURL(snapshot.ref);
-                return { success: true, url: downloadURL };
-            }
-        } catch (error) {
-            console.error('Upload file error:', error);
-            return { success: false, error: error.message };
+// STORAGE HELPERS - Cloudflare R2 Version
+async uploadFile(path, file, onProgress = null) {
+    try {
+        // Utiliser un Worker Cloudflare comme proxy sécurisé
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('path', path);
+        
+        const response = await fetch(`${R2_CONFIG.workerUrl}/upload`, {
+            method: 'POST',
+            body: formData
+        });
+        
+        if (!response.ok) {
+            throw new Error(`Upload failed: ${response.status}`);
         }
-    }
-
-    async getFileURL(path) {
-        try {
-            const storageRef = ref(this.storage, path);
-            const url = await getDownloadURL(storageRef);
-            return { success: true, url };
-        } catch (error) {
-            console.error('Get file URL error:', error);
-            return { success: false, error: error.message };
+        
+        const result = await response.json();
+        
+        if (onProgress) {
+            onProgress(100); // Simuler progression
         }
+        
+        return { 
+            success: true, 
+            url: result.url,
+            fileName: result.fileName
+        };
+    } catch (error) {
+        console.error('Upload file error:', error);
+        return { success: false, error: error.message };
     }
+}
 
-    async deleteFile(path) {
-        try {
-            const storageRef = ref(this.storage, path);
-            await deleteObject(storageRef);
-            return { success: true };
-        } catch (error) {
-            console.error('Delete file error:', error);
-            return { success: false, error: error.message };
+async getFileURL(path) {
+    try {
+        // URL publique R2
+        const publicUrl = `https://pub-${R2_CONFIG.accountId}.r2.dev/${R2_CONFIG.bucketName}/${path}`;
+        return { success: true, url: publicUrl };
+    } catch (error) {
+        console.error('Get file URL error:', error);
+        return { success: false, error: error.message };
+    }
+}
+
+async deleteFile(path) {
+    try {
+        const response = await fetch(`${R2_CONFIG.workerUrl}/delete`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path })
+        });
+        
+        if (!response.ok) {
+            throw new Error(`Delete failed: ${response.status}`);
         }
+        
+        return { success: true };
+    } catch (error) {
+        console.error('Delete file error:', error);
+        return { success: false, error: error.message };
     }
+}
 
+// Modifier la fonction submitCV pour R2
+async submitCV(cvData, cvFile) {
+    // Upload CV to R2
+    const timestamp = Date.now();
+    const fileName = `cv_${timestamp}_${cvFile.name.replace(/\s+/g, '_')}`;
+    const path = `cvs/${fileName}`;
+    
+    const uploadResult = await this.uploadFile(path, cvFile);
+    
+    if (!uploadResult.success) {
+        return uploadResult;
+    }
+    
+    // Save CV data to Firestore (toujours Firebase)
+    const cvRecord = {
+        ...cvData,
+        cvUrl: uploadResult.url, // URL R2
+        cvFileName: fileName,
+        cvPath: path, // Chemin R2
+        processed: false,
+        submittedAt: serverTimestamp()
+    };
+    
+    return await this.addDocument('cvDatabase', cvRecord);
+}
     // SITE DATA HELPERS - Fonctions spécifiques pour le site AE2I
     async getSiteSettings() {
         return await this.getDocument('settings', 'main');
@@ -365,6 +405,26 @@ class FirebaseHelper {
         });
     }
 }
+// === COMPATIBILITÉ ANCIENNE (supprime pas la version module) ===
+
+// Exporter aussi en global pour compatibilité
+if (typeof window !== 'undefined') {
+    // Créer l'instance
+    const firebaseHelperInstance = new FirebaseHelper();
+    
+    // Exposer globalement
+    window.firebaseHelper = firebaseHelperInstance;
+    window.firebaseServices = {
+        auth: auth,
+        db: db,
+        storage: storage
+    };
+    
+    console.log('🔥 Firebase helper exposé globalement via window.firebaseHelper');
+}
+
+// Exporter pour modules ES6
+export { app, auth, db, storage, FirebaseHelper };
 
 // Créer une instance globale du helper
 window.firebaseHelper = new FirebaseHelper();

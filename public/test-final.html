@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test FINAL Firebase</title>
+</head>
+<body>
+    <h1>Test Firebase - AE2I Algérie</h1>
+    
+    <div id="status">Chargement Firebase...</div>
+    
+    <!-- Firebase SDK -->
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
+    
+    <script>
+        // CONFIGURATION FIREBASE
+        const firebaseConfig = {
+            apiKey: "AIzaSyCm32jmky9Hth1muQ8gh58qqM63joqVJqU",
+            authDomain: "ae2i-b6c7f.firebaseapp.com",
+            projectId: "ae2i-b6c7f",
+            storageBucket: "ae2i-b6c7f.firebasestorage.app",
+            messagingSenderId: "952653537004",
+            appId: "1:952653537004:web:7943230cdf74baa16a4fc9",
+            measurementId: "G-WTYQ12916Z"
+        };
+        
+        // INITIALISATION
+        console.log('Initialisation Firebase...');
+        const app = firebase.initializeApp(firebaseConfig);
+        const auth = firebase.auth();
+        const db = firebase.firestore();
+        
+        document.getElementById('status').innerHTML = '✅ Firebase initialisé!';
+        console.log('Firebase apps:', firebase.apps.length);
+        
+        // TEST AUTH
+        auth.onAuthStateChanged((user) => {
+            const status = document.getElementById('status');
+            if (user) {
+                status.innerHTML += `<br><strong>✅ CONNECTÉ:</strong> ${user.email}`;
+                console.log('User logged in:', user.email);
+            } else {
+                status.innerHTML += '<br><strong>❌ DÉCONNECTÉ</strong>';
+                console.log('No user');
+            }
+        });
+        
+        // FONCTIONS DE TEST
+        window.loginAE2I = async () => {
+            const email = "selmabdf@gmail.com";
+            const password = prompt("Mot de passe admin:");
+            
+            if (!password) return;
+            
+            try {
+                console.log('Tentative login:', email);
+                const userCredential = await auth.signInWithEmailAndPassword(email, password);
+                alert('��� LOGIN RÉUSSI!');
+            } catch (error) {
+                console.error('Login error:', error);
+                alert('❌ ERREUR: ' + error.message);
+            }
+        };
+        
+        window.testFirestoreAE2I = async () => {
+    try {
+        console.log('Test Firestore...');
+        const docRef = db.collection('settings').doc('main');
+        const docSnap = await docRef.get();
+        
+        if (docSnap.exists) {
+            const data = docSnap.data();
+            
+            // Afficher correctement les données
+            let phoneText = 'Non défini';
+            if (data.phoneNumbers && Array.isArray(data.phoneNumbers)) {
+                phoneText = data.phoneNumbers.join(', ');
+            }
+            
+            alert(`✅ FIRESTORE OK!\n\n` +
+                  `Titre: ${data.siteTitle || 'Non défini'}\n` +
+                  `Email: ${data.contactEmail || 'Non défini'}\n` +
+                  `Téléphones: ${phoneText}`);
+            
+            console.log('Settings data:', data);
+        } else {
+            alert('❌ Document settings non trouvé');
+        }
+    } catch (error) {
+        console.error('Firestore error:', error);
+        alert('❌ ERREUR Firestore: ' + error.message);
+    }
+};
+        
+        window.logoutAE2I = async () => {
+            try {
+                await auth.signOut();
+                alert('Déconnecté');
+            } catch (error) {
+                alert('Erreur logout: ' + error.message);
+            }
+        };
+    </script>
+    
+    <br><br>
+    <button onclick="loginAE2I()" style="padding: 10px 20px; background: #0e7a9e; color: white; border: none; margin: 5px;">
+        ��� LOGIN Admin
+    </button>
+    <button onclick="testFirestoreAE2I()" style="padding: 10px 20px; background: #28a745; color: white; border: none; margin: 5px;">
+        ���️ TEST Firestore
+    </button>
+    <button onclick="logoutAE2I()" style="padding: 10px 20px; background: #dc3545; color: white; border: none; margin: 5px;">
+        ��� LOGOUT
+    </button>
+    
+    <br><br>
+    <div style="background: #f8f9fa; padding: 15px; border-radius: 5px;">
+        <strong>Infos de test:</strong><br>
+        Email: selmabdf@gmail.com<br>
+        URL: https://ae2i-b6c7f.web.app/test-final.html<br>
+        Vérifie la console (F12) pour les logs
+    </div>
+</body>
+</html>

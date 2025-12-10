@@ -90,6 +90,26 @@ export default {
           });
         }
       }
+       // Dans la fonction fetch, ajoute:
+if (request.method === 'GET' && url.pathname.startsWith('/download/')) {
+    try {
+        const path = url.pathname.replace('/download/', '');
+        const object = await env.AE2I_BUCKET.get(path);
+        
+        if (object === null) {
+            return new Response('File not found', { status: 404 });
+        }
+        
+        const headers = new Headers();
+        object.writeHttpMetadata(headers);
+        headers.set('etag', object.httpEtag);
+        headers.set('Access-Control-Allow-Origin', '*');
+        
+        return new Response(object.body, { headers });
+    } catch (error) {
+        return new Response('Error: ' + error.message, { status: 500 });
+    }
+}
       
       // Health check
       return new Response(JSON.stringify({

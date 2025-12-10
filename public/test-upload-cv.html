@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test Upload CV - AE2I Algérie</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 600px;
+            margin: 40px auto;
+            padding: 20px;
+        }
+        h1 {
+            color: #0e7a9e;
+        }
+        input[type="file"] {
+            margin: 10px 0;
+            padding: 10px;
+            border: 2px dashed #0e7a9e;
+            border-radius: 5px;
+            width: 100%;
+        }
+        button {
+            background: #0e7a9e;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        button:hover {
+            background: #0a5a7a;
+        }
+        #result {
+            margin-top: 20px;
+            padding: 15px;
+            border-radius: 5px;
+            background: #f8f9fa;
+        }
+        .success {
+            border: 2px solid #28a745;
+            color: #155724;
+            background: #d4edda;
+        }
+        .error {
+            border: 2px solid #dc3545;
+            color: #721c24;
+            background: #f8d7da;
+        }
+        .loading {
+            border: 2px solid #ffc107;
+            color: #856404;
+            background: #fff3cd;
+        }
+    </style>
+</head>
+<body>
+    <h1>📄 Test Upload CV vers Cloudflare R2</h1>
+    
+    <p>Ce test vérifie que l'upload des CVs fonctionne avec Cloudflare R2.</p>
+    
+    <div>
+        <input type="file" id="cvFile" accept=".pdf,.doc,.docx,.jpg,.png">
+        <button onclick="uploadCV()">📤 Upload CV</button>
+    </div>
+    
+    <div id="result"></div>
+    
+    <div style="margin-top: 30px; padding: 15px; background: #e9ecef; border-radius: 5px;">
+        <strong>ℹ️ Instructions:</strong>
+        <ol>
+            <li>Choisis un fichier (PDF, DOC, ou image)</li>
+            <li>Clique "Upload CV"</li>
+            <li>Le fichier sera stocké dans Cloudflare R2</li>
+            <li>L'URL retournée est pour l'admin seulement</li>
+        </ol>
+    </div>
+    
+    <script>
+        const R2_WORKER_URL = 'https://upload-ae2i.ae2ialgerie2025.workers.dev';
+        
+        function showResult(message, isSuccess = true) {
+            const resultDiv = document.getElementById('result');
+            resultDiv.innerHTML = message;
+            resultDiv.className = isSuccess ? 'success' : 'error';
+        }
+        
+        function showLoading(message) {
+            const resultDiv = document.getElementById('result');
+            resultDiv.innerHTML = message;
+            resultDiv.className = 'loading';
+        }
+        
+        async function uploadCV() {
+            const fileInput = document.getElementById('cvFile');
+            const file = fileInput.files[0];
+            
+            if (!file) {
+                alert('⚠️ Choisis un fichier CV!');
+                return;
+            }
+            
+            // Vérifier la taille (max 10MB)
+            if (file.size > 10 * 1024 * 1024) {
+                alert('❌ Fichier trop grand! Maximum 10MB.');
+                return;
+            }
+            
+            showLoading('⏳ Upload en cours...');
+            
+            const formData = new FormData();
+            const timestamp = Date.now();
+            const safeFileName = file.name.replace(/[^a-zA-Z0-9.-]/g, '_');
+            const path = `test-cvs/${timestamp}_${safeFileName}`;
+            
+            formData.append('file', file);
+            formData.append('path', path);
+            
+            try {
+                const response = await fetch(R2_WORKER_URL + '/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    showResult(`
+                        <h3>✅ Upload réussi!</h3>
+                        <p><strong>Nom:</strong> ${result.fileName}</p>
+                        <p><strong>Chemin:</strong> ${result.path}</p>
+                        <p><strong>Taille:</strong> ${(file.size / 1024).toFixed(2)} KB</p>
+                        <p><strong>Type:</strong> ${file.type}</p>
+                        <p><strong>URL Admin:</strong> <a href="${result.url}" target="_blank">${result.url}</a></p>
+                        <p><em>Note: Les CVs sont stockés privés. Seul l'admin peut y accéder.</em></p>
+                    `);
+                    
+                    console.log('Upload success:', result);
+                } else {
+                    showResult(`
+                        <h3>❌ Erreur d'upload</h3>
+                        <p><strong>Message:</strong> ${result.error || 'Erreur inconnue'}</p>
+                    `, false);
+                }
+            } catch (error) {
+                showResult(`
+                    <h3>❌ Erreur de connexion</h3>
+                    <p><strong>Message:</strong> ${error.message}</p>
+                    <p>Vérifie que le Worker Cloudflare est déployé.</p>
+                `, false);
+                
+                console.error('Upload error:', error);
+            }
+        }
+        
+        // Initialisation
+        console.log('Test Upload CV - AE2I Algérie');
+        console.log('Worker URL:', R2_WORKER_URL);
+        document.getElementById('result').innerHTML = '<p>Prêt pour l\'upload...</p>';
+    </script>
+</body>
+</html>

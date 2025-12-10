@@ -1,7 +1,219 @@
+
 /* SECTION: API/LOCAL MODE CONFIG */
         const MODE = 'LOCAL'; // 'API' | 'LOCAL'
         const API_BASE_URL = '................';
         const API_KEY = '.................';
+// === CONFIGURATION MODE ===
+const APP_MODE = 'FIREBASE'; // 'LOCAL' ou 'FIREBASE'
+
+// Configuration Cloudflare R2 (pour upload CV)
+const R2_CONFIG = {
+    workerUrl: 'https://upload-ae2i.ae2ialgerie2025.workers.dev',
+    publicUrl: 'https://pub-298ee83d49284d7cc8b8c2eac280bf44.r2.dev/ae2i-cvs-algerie'
+};
+
+// ====================================================
+// FIREBASE FUNCTIONS - AJOUTER ICI (APRÈS R2_CONFIG)
+// ====================================================
+
+/* 🔥 FIX SUPRÊME : Utiliser Firebase Authentication comme source VRAIE de currentUser */
+
+function listenFirebaseAuth() {
+    if (APP_MODE !== "FIREBASE") return;
+
+    const auth = window.firebaseServices?.auth;
+    if (!auth) {
+        console.error("❌ Firebase Auth introuvable !");
+        return;
+    }
+
+    auth.onAuthStateChanged(async (fbUser) => {
+        console.log("🔄 [AUTH] Firebase Auth changed:", fbUser);
+
+        if (!fbUser) {
+            console.log("👤 [AUTH] Aucun utilisateur connecté → currentUser = guest");
+            currentUser = { username: "guest", role: "guest", isLoggedIn: false };
+            updateLoginStatus();
+            return;
+        }
+
+        console.log("🔐 [AUTH] Firebase user connecté:", fbUser.email);
+
+        // charger le rôle depuis Firestore (collection users)
+        const db = window.firebaseServices.firestore;
+        const ref = db.collection("users").doc(fbUser.uid);
+        const snap = await ref.get();
+
+        if (!snap.exists) {
+            console.warn("⚠️ Aucun document user trouvé pour cet UID !");
+            currentUser = {
+                username: fbUser.email,
+                role: "lecteur",
+                isLoggedIn: true
+            };
+        } else {
+            const userData = snap.data();
+            currentUser = {
+                username: fbUser.email,
+                email: fbUser.email,
+                role: userData.role || "lecteur",
+                isLoggedIn: true
+            };
+        }
+
+        console.log("🟩 [AUTH] currentUser mis à jour depuis Firestore:", currentUser);
+
+        // mettre à jour l’UI
+        updateLoginStatus();
+    });
+}
+
+/* === INITIALISATION FIREBASE === */
+function initializeFirebase() {
+    console.log("🔥 VERSION SCRIPT = 7.1");
+    console.log('🔥 === INITIALISATION FIREBASE ===');
+    console.log('APP_MODE:', APP_MODE);
+    console.log('Firebase helper disponible?', typeof window.firebaseHelper !== 'undefined');
+    
+    if (APP_MODE !== 'FIREBASE') {
+        console.log('⚠️ Mode LOCAL - Firebase non initialisé');
+        return;
+    }
+    
+    if (typeof window.firebaseHelper === 'undefined') {
+        console.error('❌ Firebase helper non trouvé!');
+        console.log('Vérifiez que firebase.js est chargé avant script.js');
+        return;
+    }
+    
+    console.log('✅ Firebase helper disponible');
+    console.log('🔥 Services Firebase:', window.firebaseServices ? 'disponibles' : 'indisponibles');
+    
+    // Test de connexion simple
+    testFirebaseConnection();
+
+    listenFirebaseAuth();
+
+}
+
+/* === FONCTION DE TEST FIREBASE === */
+async function testFirebaseConnection() {
+    console.log('🧪 testFirebaseConnection appelée');
+    
+    if (typeof window.firebaseHelper === 'undefined') {
+        console.error('❌ Firebase helper non trouvé!');
+        return;
+    }
+    
+    console.log('✅ Firebase helper trouvé');
+    console.log('submitCV existe?', typeof window.firebaseHelper.submitCV);
+    
+    try {
+        // Test simple avec un faux fichier
+        const testContent = "Test CV Firebase";
+        const blob = new Blob([testContent], { type: 'text/plain' });
+        const testFile = new File([blob], "test_firebase.txt", { type: 'text/plain' });
+        
+        const testData = {
+            fullName: "Test User Firebase",
+            email: "test_firebase@example.com",
+            phone: "0123456789",
+            position: "Test Position Firebase"
+        };
+        
+        console.log('🚀 Appel submitCV de FirebaseHelper...');
+        const result = await window.firebaseHelper.submitCV(testData, testFile);
+        console.log('📦 Résultat submitCV:', result);
+        
+        return result;
+        
+    } catch (error) {
+        console.error('❌ Erreur test Firebase:', error);
+        return { success: false, error: error.message };
+    }
+}
+/* 🔥 FIX GLOBAL : Restaurer la session AVANT TOUT */
+
+(function restoreUserEarly() {
+    try {
+        const saved = localStorage.getItem("ae2i_current_user");
+        console.log("🟦 EARLY RESTORE: saved session =", saved);
+
+        if (saved) {
+            const parsed = JSON.parse(saved);
+            if (parsed && parsed.isLoggedIn) {
+                console.log("🟩 EARLY RESTORE: Session restaurée AVANT INITS:", parsed);
+                window.currentUser = parsed;
+            } else {
+                console.log("🟨 EARLY RESTORE: Session trouvée mais user non-connecté");
+            }
+        } else {
+            console.log("🟥 EARLY RESTORE: Aucun savedUser trouvé");
+        }
+
+    } catch (e) {
+        console.error("❌ EARLY RESTORE ERROR:", e);
+    }
+})();
+
+/* === FONCTION UPLOAD VERS R2 === */
+async function uploadCVToR2(cvFile, applicantName, jobTitle) {
+    console.log('📤 uploadCVToR2 appelée');
+    
+    try {
+        const formData = new FormData();
+        const timestamp = Date.now();
+        const safeFileName = cvFile.name.replace(/[^a-zA-Z0-9.-]/g, '_');
+        const path = `cvs/${timestamp}_${safeFileName}`;
+        
+        formData.append('file', cvFile);
+        formData.append('path', path);
+        
+        console.log('📤 Upload vers:', R2_CONFIG.workerUrl + '/upload');
+        
+        const response = await fetch(R2_CONFIG.workerUrl + '/upload', {
+            method: 'POST',
+            body: formData
+        });
+        
+        if (!response.ok) {
+            throw new Error(`Upload failed: ${response.status} ${response.statusText}`);
+        }
+        
+        const result = await response.json();
+        
+        console.log('✅ Upload R2 réussi:', result);
+        return {
+            success: true,
+            url: result.url,
+            path: result.path,
+            fileName: cvFile.name
+        };
+        
+    } catch (error) {
+        console.error('❌ Upload R2 échoué:', error);
+        return {
+            success: false,
+            error: error.message
+        };
+    }
+}
+
+/* === EXPOSITION GLOBALE IMMÉDIATE === */
+// Exposer immédiatement au window
+window.testFirebaseConnection = testFirebaseConnection;
+window.initializeFirebase = initializeFirebase;
+window.uploadCVToR2 = uploadCVToR2;
+
+console.log('✅ Fonctions Firebase définies et exposées');
+console.log('- testFirebaseConnection:', typeof testFirebaseConnection);
+console.log('- window.testFirebaseConnection:', typeof window.testFirebaseConnection);
+
+// Appeler l'initialisation au chargement
+document.addEventListener('DOMContentLoaded', function() {
+    console.log('📄 DOM chargé - Initialisation...');
+    initializeFirebase();
+});
 
 /* SECTION: VARIABLES GLOBALES */
         let currentPage = 'home';
@@ -567,6 +779,102 @@
             }
         };
 
+        /* === FIREBASE/CLOUDFLARE R2 FUNCTIONS === */
+
+// Fonction pour uploader le CV vers Cloudflare R2
+async function uploadCVToR2(cvFile, applicantName, jobTitle) {
+    try {
+        console.log('📤 [R2] Uploading CV to Cloudflare R2...');
+        
+        const formData = new FormData();
+        const timestamp = Date.now();
+        const safeFileName = cvFile.name.replace(/[^a-zA-Z0-9.-]/g, '_');
+        const path = `cvs/${timestamp}_${safeFileName}`;
+        
+        formData.append('file', cvFile);
+        formData.append('path', path);
+        
+        // Upload via Worker Cloudflare
+        const response = await fetch(R2_CONFIG.workerUrl + '/upload', {
+            method: 'POST',
+            body: formData
+        });
+        
+        if (!response.ok) {
+            throw new Error(`Upload failed: ${response.status}`);
+        }
+        
+        const result = await response.json();
+        
+        if (!result.success) {
+            throw new Error(result.error);
+        }
+        
+        console.log('✅ [R2] CV uploaded successfully:', result.url);
+        
+        return {
+            success: true,
+            url: result.url,
+            path: result.path,
+            fileName: cvFile.name
+        };
+        
+    } catch (error) {
+        console.error('❌ [R2] Upload error:', error);
+        return {
+            success: false,
+            error: error.message
+        };
+    }
+}
+
+// Fonction pour sauvegarder la candidature dans Firebase
+async function saveApplicationToFirebase(applicationData, cvUrl = null) {
+    try {
+        if (typeof window.firebaseHelper === 'undefined') {
+            throw new Error('Firebase not initialized');
+        }
+        
+        console.log('🔥 [FIREBASE] Saving application...');
+        
+        // Préparer les données pour Firebase
+        const firebaseApplication = {
+            ...applicationData,
+            cvUrl: cvUrl || null, // URL R2 si disponible
+            applicantCV: null, // Ne pas stocker le fichier en base64
+            cvFileName: applicationData.applicantCV.name,
+            cvFileSize: applicationData.applicantCV.size,
+            cvFileType: applicationData.applicantCV.type,
+            status: 'new',
+            source: 'website_form',
+            submittedAt: new Date().toISOString()
+        };
+        
+        // Supprimer le contenu du fichier base64 pour économiser de l'espace
+        delete firebaseApplication.applicantCV.content;
+        
+        // Sauvegarder dans Firestore
+        const result = await window.firebaseHelper.addDocument('cv_submissions', firebaseApplication);
+        
+        if (result.success) {
+            console.log('✅ [FIREBASE] Application saved with ID:', result.id);
+            return {
+                success: true,
+                firebaseId: result.id
+            };
+        } else {
+            throw new Error(result.error);
+        }
+        
+    } catch (error) {
+        console.error('❌ [FIREBASE] Save error:', error);
+        return {
+            success: false,
+            error: error.message
+        };
+    }
+}
+
         // Système de notifications ultra-amélioré OPÉRATIONNEL avec sauvegarde forcée
         /* FIX: Add deduplication system to prevent multiple identical notifications */
         const notificationHistory = new Map();
@@ -704,6 +1012,316 @@
             }
             return true;
         }
+        /* === FONCTION VIEWRECRUTEURAPPLICATIONS === */
+function viewRecruteurApplications(jobId) {
+    console.log('📋 [RECRUITER] Viewing applications for job ID:', jobId);
+    
+    if (!currentUser || (currentUser.role !== 'recruiter' && currentUser.role !== 'admin')) {
+        showNotification('Accès non autorisé', 'error');
+        return;
+    }
+    
+    // Trouver le job
+    const job = siteData.jobs.find(j => j.id == jobId);
+    if (!job) {
+        showNotification('Offre non trouvée', 'error');
+        return;
+    }
+    
+    // Filtrer les candidatures pour ce job
+    const applications = siteData.cvDatabase.filter(cv => cv.jobId == jobId);
+    
+    console.log(`📊 ${applications.length} candidature(s) trouvée(s) pour "${job.title.fr}"`);
+    
+    // Si pas de candidatures
+    if (applications.length === 0) {
+        showNotification(`Aucune candidature pour "${job.title.fr}"`, 'info');
+        return;
+    }
+    
+    // Créer le HTML pour afficher les candidatures
+    let modalHTML = `
+        <div class="applications-modal">
+            <div class="modal-header" style="background: var(--primary); color: white; padding: 20px; border-radius: 12px 12px 0 0;">
+                <h3 style="margin: 0;">
+                    <i class="fas fa-users"></i> 
+                    Candidatures pour: ${job.title.fr}
+                </h3>
+                <p style="margin: 5px 0 0 0; opacity: 0.9;">
+                    ${applications.length} candidature(s) - ${applications.filter(a => !a.processed).length} en attente
+                </p>
+            </div>
+            
+            <div class="modal-body" style="padding: 20px; max-height: 70vh; overflow-y: auto;">
+                <div style="margin-bottom: 20px; display: flex; gap: 10px;">
+                    <button class="btn btn-sm btn-primary" onclick="exportApplicationsToCSV(${jobId})">
+                        <i class="fas fa-file-csv"></i> Exporter CSV
+                    </button>
+                    <button class="btn btn-sm btn-secondary" onclick="exportApplicationsToPDF(${jobId})">
+                        <i class="fas fa-file-pdf"></i> Exporter PDF
+                    </button>
+                    <div style="margin-left: auto;">
+                        <select id="applicationFilter" onchange="filterApplications(this.value)" class="form-control" style="width: 200px;">
+                            <option value="all">Toutes les candidatures</option>
+                            <option value="pending">En attente seulement</option>
+                            <option value="processed">Traitées seulement</option>
+                            <option value="recent">Moins de 7 jours</option>
+                        </select>
+                    </div>
+                </div>
+                
+                <div id="applicationsList">
+    `;
+    
+    // Ajouter chaque candidature
+    applications.forEach((app, index) => {
+        const appliedDate = new Date(app.appliedAt).toLocaleDateString('fr-FR');
+        const isProcessed = app.processed || false;
+        const statusClass = isProcessed ? 'status-processed' : 'status-pending';
+        const statusText = isProcessed ? 'Traité' : 'En attente';
+        
+        modalHTML += `
+            <div class="application-card ${isProcessed ? 'processed' : 'pending'}" 
+                 style="border: 1px solid var(--border); border-radius: 8px; padding: 15px; margin-bottom: 15px; background: ${isProcessed ? 'var(--bg-alt)' : 'white'};">
+                
+                <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 10px;">
+                    <div>
+                        <h4 style="margin: 0 0 5px 0; color: var(--primary);">
+                            <i class="fas fa-user"></i> ${app.applicantName || 'Non spécifié'}
+                        </h4>
+                        <p style="margin: 0 0 5px 0; font-size: 14px;">
+                            <i class="fas fa-envelope"></i> ${app.applicantEmail || 'Non spécifié'}
+                            <span style="margin-left: 15px;">
+                                <i class="fas fa-phone"></i> ${app.applicantPhone || 'Non spécifié'}
+                            </span>
+                        </p>
+                    </div>
+                    
+                    <div style="text-align: right;">
+                        <span class="status-badge ${statusClass}" style="font-size: 12px;">
+                            ${statusText}
+                        </span>
+                        <p style="margin: 5px 0 0 0; font-size: 12px; color: var(--text-light);">
+                            <i class="far fa-calendar"></i> ${appliedDate}
+                        </p>
+                    </div>
+                </div>
+                
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; margin-bottom: 10px; font-size: 14px;">
+                    ${app.applicantPosition ? `<div><strong>Poste actuel:</strong> ${app.applicantPosition}</div>` : ''}
+                    ${app.applicantDiploma ? `<div><strong>Diplôme:</strong> ${app.applicantDiploma}</div>` : ''}
+                    ${app.expectedSalary ? `<div><strong>Salaire souhaité:</strong> ${app.expectedSalary} DA</div>` : ''}
+                    ${app.yearsExperience ? `<div><strong>Expérience:</strong> ${app.yearsExperience} ans</div>` : ''}
+                </div>
+                
+                <div style="display: flex; gap: 10px; margin-top: 10px;">
+                    <button class="btn btn-sm btn-outline" onclick="previewCV(${app.id})">
+                        <i class="fas fa-eye"></i> Voir CV
+                    </button>
+                    <button class="btn btn-sm btn-outline" onclick="contactApplicant('${app.applicantEmail}')">
+                        <i class="fas fa-envelope"></i> Contacter
+                    </button>
+                    ${!isProcessed ? `
+                        <button class="btn btn-sm btn-success" onclick="markAsProcessed(${app.id})">
+                            <i class="fas fa-check"></i> Marquer traité
+                        </button>
+                    ` : ''}
+                    <button class="btn btn-sm btn-danger" onclick="deleteApplication(${app.id})">
+                        <i class="fas fa-trash"></i> Supprimer
+                    </button>
+                </div>
+                
+                ${app.pdfSummary ? `
+                    <div style="margin-top: 10px; padding: 10px; background: var(--bg-alt); border-radius: 5px; font-size: 13px;">
+                        <strong><i class="fas fa-file-pdf"></i> Résumé PDF généré:</strong>
+                        <div style="max-height: 100px; overflow: auto; margin-top: 5px;">
+                            ${app.pdfSummary.substring(0, 200)}...
+                        </div>
+                    </div>
+                ` : ''}
+            </div>
+        `;
+    });
+    
+    modalHTML += `
+                </div>
+            </div>
+            
+            <div class="modal-footer" style="padding: 15px 20px; background: var(--bg-alt); border-radius: 0 0 12px 12px; text-align: center;">
+                <button class="btn btn-primary" onclick="closeModal('applicationsModal')">
+                    <i class="fas fa-times"></i> Fermer
+                </button>
+            </div>
+        </div>
+    `;
+    
+    // Créer et afficher la modal
+    const modalId = 'applicationsModal';
+    const existingModal = document.getElementById(modalId);
+    if (existingModal) {
+        existingModal.remove();
+    }
+    
+    const modalDiv = document.createElement('div');
+    modalDiv.id = modalId;
+    modalDiv.className = 'modal';
+    modalDiv.style.cssText = `
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0,0,0,0.7);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 10000;
+    `;
+    
+    const modalContent = document.createElement('div');
+    modalContent.className = 'modal-content';
+    modalContent.style.cssText = `
+        background: white;
+        width: 90%;
+        max-width: 1000px;
+        max-height: 90vh;
+        border-radius: 12px;
+        overflow: hidden;
+        box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+    `;
+    
+    modalContent.innerHTML = modalHTML;
+    modalDiv.appendChild(modalContent);
+    document.body.appendChild(modalDiv);
+    
+    // Ajouter fonction de fermeture
+    modalDiv.addEventListener('click', function(e) {
+        if (e.target === modalDiv) {
+            modalDiv.remove();
+        }
+    });
+    
+    // Log activity
+    logActivity(currentUser.username, `Affiche candidatures pour ${job.title.fr} (${applications.length} candidatures)`);
+    
+    return applications;
+}
+
+/* === FONCTIONS AUXILIAIRES POUR LA MODAL === */
+
+function filterApplications(filterType) {
+    const applicationsList = document.getElementById('applicationsList');
+    if (!applicationsList) return;
+    
+    const cards = applicationsList.querySelectorAll('.application-card');
+    const now = new Date();
+    const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    
+    cards.forEach(card => {
+        let show = true;
+        
+        switch(filterType) {
+            case 'pending':
+                show = card.classList.contains('pending');
+                break;
+            case 'processed':
+                show = card.classList.contains('processed');
+                break;
+            case 'recent':
+                // Vérifier si la candidature date de moins de 7 jours
+                const dateText = card.querySelector('.fa-calendar')?.parentElement?.textContent;
+                if (dateText) {
+                    const dateParts = dateText.match(/(\d{2})\/(\d{2})\/(\d{4})/);
+                    if (dateParts) {
+                        const appDate = new Date(`${dateParts[3]}-${dateParts[2]}-${dateParts[1]}`);
+                        show = appDate > sevenDaysAgo;
+                    }
+                }
+                break;
+            case 'all':
+            default:
+                show = true;
+        }
+        
+        card.style.display = show ? 'block' : 'none';
+    });
+}
+
+function exportApplicationsToCSV(jobId) {
+    const applications = siteData.cvDatabase.filter(cv => cv.jobId == jobId);
+    const job = siteData.jobs.find(j => j.id == jobId);
+    
+    if (applications.length === 0) {
+        showNotification('Aucune candidature à exporter', 'warning');
+        return;
+    }
+    
+    let csv = 'Nom,Email,Téléphone,Poste actuel,Diplôme,Salaire souhaité,Expérience,Date,Statut\n';
+    
+    applications.forEach(app => {
+        const row = [
+            `"${app.applicantName || ''}"`,
+            `"${app.applicantEmail || ''}"`,
+            `"${app.applicantPhone || ''}"`,
+            `"${app.applicantPosition || ''}"`,
+            `"${app.applicantDiploma || ''}"`,
+            `"${app.expectedSalary || ''}"`,
+            `"${app.yearsExperience || ''}"`,
+            `"${new Date(app.appliedAt).toLocaleDateString('fr-FR')}"`,
+            `"${app.processed ? 'Traité' : 'En attente'}"`
+        ].join(',');
+        
+        csv += row + '\n';
+    });
+    
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `Candidatures_${job?.title.fr || 'Job'}_${new Date().toISOString().split('T')[0]}.csv`;
+    link.click();
+    
+    showNotification(`Export CSV réussi (${applications.length} candidatures)`, 'success');
+    logActivity(currentUser.username, `Export CSV candidatures pour ${job?.title.fr || 'job'} (${applications.length} lignes)`);
+}
+
+function exportApplicationsToPDF(jobId) {
+    const applications = siteData.cvDatabase.filter(cv => cv.jobId == jobId);
+    const job = siteData.jobs.find(j => j.id == jobId);
+    
+    if (applications.length === 0) {
+        showNotification('Aucune candidature à exporter', 'warning');
+        return;
+    }
+    
+    // Simple export texte pour l'instant (vous pourriez intégrer jsPDF plus tard)
+    let content = `Candidatures pour: ${job?.title.fr || 'Offre non spécifiée'}\n`;
+    content += `Date d'export: ${new Date().toLocaleDateString('fr-FR')}\n`;
+    content += `Nombre de candidatures: ${applications.length}\n\n`;
+    content += '='.repeat(80) + '\n\n';
+    
+    applications.forEach((app, index) => {
+        content += `${index + 1}. ${app.applicantName || 'Non spécifié'}\n`;
+        content += `   Email: ${app.applicantEmail || 'Non spécifié'}\n`;
+        content += `   Téléphone: ${app.applicantPhone || 'Non spécifié'}\n`;
+        content += `   Poste actuel: ${app.applicantPosition || 'Non spécifié'}\n`;
+        content += `   Diplôme: ${app.applicantDiploma || 'Non spécifié'}\n`;
+        content += `   Salaire souhaité: ${app.expectedSalary || 'Non spécifié'} DA\n`;
+        content += `   Expérience: ${app.yearsExperience || 'Non spécifié'} ans\n`;
+        content += `   Date: ${new Date(app.appliedAt).toLocaleDateString('fr-FR')}\n`;
+        content += `   Statut: ${app.processed ? 'Traité' : 'En attente'}\n`;
+        content += '-'.repeat(40) + '\n\n';
+    });
+    
+    const blob = new Blob([content], { type: 'text/plain;charset=utf-8;' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `Candidatures_${job?.title.fr || 'Job'}_${new Date().toISOString().split('T')[0]}.txt`;
+    link.click();
+    
+    showNotification(`Export PDF réussi (${applications.length} candidatures)`, 'success');
+    logActivity(currentUser.username, `Export PDF candidatures pour ${job?.title.fr || 'job'} (${applications.length} candidatures)`);
+}
+
 
         function saveConsentSettings() {
             const cookies = document.getElementById('cookiesConsent').checked;
@@ -922,76 +1540,133 @@
                 loginModal.classList.remove('show');
             });
 
-            loginForm.addEventListener('submit', function(e) {
-                e.preventDefault();
-                const username = document.getElementById('loginUsername').value;
-                const password = document.getElementById('loginPassword').value;
+            // loginForm.addEventListener('submit', function(e) {
+            //     e.preventDefault();
+            //     const username = document.getElementById('loginUsername').value;
+            //     const password = document.getElementById('loginPassword').value;
 
-                console.log('🔍 Tentative connexion:', username);
-                console.log('📋 Total utilisateurs:', siteData.users.length);
-                console.log('📋 Utilisateurs disponibles:', siteData.users.map(u => ({
-                    username: u.username,
-                    email: u.email,
-                    role: u.role,
-                    active: u.active,
-                    passwordLength: u.password?.length
-                })));
+            //     console.log('🔍 Tentative connexion:', username);
+            //     console.log('📋 Total utilisateurs:', siteData.users.length);
+            //     console.log('📋 Utilisateurs disponibles:', siteData.users.map(u => ({
+            //         username: u.username,
+            //         email: u.email,
+            //         role: u.role,
+            //         active: u.active,
+            //         passwordLength: u.password?.length
+            //     })));
 
-                const user = siteData.users.find(u => (u.username === username || u.email === username) && u.password === password && u.active);
+            //     const user = siteData.users.find(u => (u.username === username || u.email === username) && u.password === password && u.active);
 
-                if (user) {
-                    console.log('✅ Utilisateur trouvé:', user.username, 'Role:', user.role);
+            //     if (user) {
+            //         console.log('✅ Utilisateur trouvé:', user.username, 'Role:', user.role);
 
-                    currentUser = {
-                        username: user.username,
-                        email: user.email,
-                        role: user.role,
-                        isLoggedIn: true
-                    };
+            //         currentUser = {
+            //             username: user.username,
+            //             email: user.email,
+            //             role: user.role,
+            //             isLoggedIn: true
+            //         };
 
-                    user.lastLogin = new Date().toISOString();
+            //         user.lastLogin = new Date().toISOString();
 
-                    // Sauvegarder la session dans localStorage
-                    localStorage.setItem('ae2i_current_user', JSON.stringify(currentUser));
+            //         // Sauvegarder la session dans localStorage
+            //         localStorage.setItem('ae2i_current_user', JSON.stringify(currentUser));
 
-                    // Force save immediately after login avec vérification
-                    if (forceSaveData()) {
-                        // Mettre à jour immédiatement le bouton et le statut
-                        updateLoginButton();
-                        updateLoginStatus();
-                        loginModal.classList.remove('show');
-                        loginForm.reset();
+            //         // Force save immediately after login avec vérification
+            //         if (forceSaveData()) {
+            //             // Mettre à jour immédiatement le bouton et le statut
+            //             updateLoginButton();
+            //             updateLoginStatus();
+            //             loginModal.classList.remove('show');
+            //             loginForm.reset();
 
-                        const welcomeMsg = siteData.language === 'en' ? 
-                            `Welcome, ${user.username}!` :
-                            `Bienvenue, ${user.username}!`;
+            //             const welcomeMsg = siteData.language === 'en' ? 
+            //                 `Welcome, ${user.username}!` :
+            //                 `Bienvenue, ${user.username}!`;
                         
-                        showNotification(welcomeMsg, 'success');
-                        logActivity(user.username, `Connexion réussie (rôle: ${user.role})`);
+            //             showNotification(welcomeMsg, 'success');
+            //             logActivity(user.username, `Connexion réussie (rôle: ${user.role})`);
 
-                        // Rediriger vers le dashboard approprié
-                        if (user.role === 'admin') {
-                            showPage('admin');
-                        } else if (user.role === 'recruiter' || user.role === 'recruteur') {
-                            showPage('recruteur');
-                        } else if (user.role === 'reader' || user.role === 'lecteur') {
-                            showPage('lecteur');
-                        }
-                    } else {
-                        showNotification('Échec de sauvegarde - Veuillez réessayer', 'error');
-                    }
+            //             // Rediriger vers le dashboard approprié
+            //             if (user.role === 'admin') {
+            //                 showPage('admin');
+            //             } else if (user.role === 'recruiter' || user.role === 'recruteur') {
+            //                 showPage('recruteur');
+            //             } else if (user.role === 'reader' || user.role === 'lecteur') {
+            //                 showPage('lecteur');
+            //             }
+            //         } else {
+            //             showNotification('Échec de sauvegarde - Veuillez réessayer', 'error');
+            //         }
+            //     } else {
+            //         console.log('❌ Échec connexion - Vérification:', {
+            //             tentativeUsername: username,
+            //             tentativePasswordLength: password.length,
+            //             correspondanceUsername: siteData.users.some(u => u.username === username || u.email === username),
+            //             correspondancePassword: siteData.users.some(u => u.password === password),
+            //             correspondanceActive: siteData.users.some(u => u.active && (u.username === username || u.email === username))
+            //         });
+            //         showNotification(siteData.language === 'en' ? 'Incorrect credentials' : 'Identifiants incorrects', 'error');
+            //     }
+            // });
+            loginForm.addEventListener('submit', async function(e) {
+                e.preventDefault();
+            
+                const email = document.getElementById('loginUsername').value;
+                const password = document.getElementById('loginPassword').value;
+            
+                console.log('🔍 Tentative connexion Firebase:', email);
+            
+                if (!window.firebaseHelper) {
+                    console.error('❌ FirebaseHelper non initialisé');
+                    showNotification('Firebase non prêt', 'error');
+                    return;
+                }
+            
+                // 🔐 Login via FirebaseHelper
+                const result = await window.firebaseHelper.login(email, password);
+            
+                if (!result.success) {
+                    console.log('❌ Login échoué:', result.error);
+                    showNotification(result.error, 'error');
+                    return;
+                }
+            
+                console.log('✅ Utilisateur connecté via Firebase:', result.user);
+            
+                // currentUser sera mis à jour automatiquement via onAuthStateChanged
+                // mais tu peux faire un set immédiat si tu veux update UI tout de suite
+                const fbUser = result.user;
+                currentUser = {
+                    username: fbUser.email,
+                    email: fbUser.email,
+                    role: 'lecteur', // valeur par défaut, sera mise à jour depuis Firestore si tu récupères le doc
+                    isLoggedIn: true
+                };
+            
+                updateLoginButton();
+                updateLoginStatus();
+            
+                loginModal.classList.remove('show');
+                loginForm.reset();
+            
+                const welcomeMsg = siteData.language === 'en' ?
+                    `Welcome, ${currentUser.username}!` :
+                    `Bienvenue, ${currentUser.username}!`;
+            
+                showNotification(welcomeMsg, 'success');
+                logActivity(currentUser.username, `Connexion réussie (Firebase)`);
+            
+                // Redirection selon rôle
+                if (currentUser.role === 'admin') {
+                    showPage('admin');
+                } else if (currentUser.role === 'recruiter' || currentUser.role === 'recruteur') {
+                    showPage('recruteur');
                 } else {
-                    console.log('❌ Échec connexion - Vérification:', {
-                        tentativeUsername: username,
-                        tentativePasswordLength: password.length,
-                        correspondanceUsername: siteData.users.some(u => u.username === username || u.email === username),
-                        correspondancePassword: siteData.users.some(u => u.password === password),
-                        correspondanceActive: siteData.users.some(u => u.active && (u.username === username || u.email === username))
-                    });
-                    showNotification(siteData.language === 'en' ? 'Incorrect credentials' : 'Identifiants incorrects', 'error');
+                    showPage('lecteur');
                 }
             });
-
+            
             adminPanelLink.addEventListener('click', function(e) {
                 e.preventDefault();
                 console.log('🔍 [CLICK] adminPanelLink cliqué - currentUser:', JSON.stringify(currentUser));
@@ -1581,92 +2256,130 @@
             }
         }
 
-        /* FIX: Préserver currentUser lors de la sauvegarde */
-        // SYSTÈME DE SAUVEGARDE FORCÉE ULTRA-AMÉLIORÉ ET CORRECTION COMPLÈTE DES BUGS
         function forceSaveData() {
+            
+                console.log("🟦 DEBUG: loadSiteData() appelée");
+            
+                console.log("🟦 DEBUG: Avant restauration, currentUser =", currentUser);
+            
+                // Vérifier si une session existe dans localStorage
+                const savedUser = localStorage.getItem("ae2i_current_user");
+                console.log("🟦 DEBUG: savedUser brut =", savedUser);
+            
+                if (savedUser) {
+                    try {
+                        const parsed = JSON.parse(savedUser);
+                        console.log("🟦 DEBUG: parsed savedUser =", parsed);
+            
+                        if (parsed.isLoggedIn) {
+                            console.log("🟩 DEBUG: RESTAURATION: session trouvée → currentUser devient :", parsed);
+                            currentUser = parsed;
+                        } else {
+                            console.log("🟨 DEBUG: Session trouvée mais user NON connecté → on ignore");
+                        }
+                    } catch (e) {
+                        console.log("🟥 DEBUG: Erreur parsing savedUser", e);
+                    }
+                } else {
+                    console.log("🟥 DEBUG: Aucun savedUser trouvé dans localStorage");
+                }
+            
             console.log('[QA] Saving siteData...');
             if (saveInProgress) {
                 console.log('⏳ Sauvegarde déjà en cours, attente...');
                 return false;
             }
-
+        
             saveInProgress = true;
-
+        
             try {
-                /* FIX: Sauvegarder currentUser AVANT toute opération */
-                localStorage.setItem('ae2i_current_user', JSON.stringify(currentUser));
-                console.log('💾 [SAVE] Session préservée:', currentUser.username, currentUser.role);
-
-                // Validation des données avant sauvegarde
-                if (!siteData || typeof siteData !== 'object') {
-                    throw new Error('Données invalides');
+                /* ---------------------------
+                   🔐 FIX : Protéger currentUser
+                ---------------------------- */
+                try {
+                    const savedSession = localStorage.getItem('ae2i_current_user');
+        
+                    if (savedSession) {
+                        const parsed = JSON.parse(savedSession);
+        
+                        // Si la session sauvée est connectée mais currentUser == guest → NE PAS ÉCRASER
+                        if (parsed.isLoggedIn && (!currentUser || !currentUser.isLoggedIn)) {
+                            console.log("💾 [PATCH] Empêche écrasement — restauration utilisateur connecté.");
+                            currentUser = parsed;
+                        }
+                    }
+                } catch (e) {
+                    console.warn("⚠️ Erreur analyse session:", e);
                 }
-
-                // Créer une copie profonde avec safeSerialize pour éviter les données volumineuses
+        
+                // Sauvegarde sécurisée de currentUser
+                if (currentUser && currentUser.isLoggedIn) {
+                    localStorage.setItem("ae2i_current_user", JSON.stringify(currentUser));
+                    console.log("💾 [SAVE] Session préservée:", currentUser.username, currentUser.role);
+                } else {
+                    console.log("💾 [SAVE] Aucun user connecté → pas de remplacement.");
+                }
+        
+                /* ---------------------------
+                   🧠 SAFE-SERIALIZE
+                ---------------------------- */
                 console.log('[QA] Applying safeSerialize to siteData...');
                 const dataToSave = safeSerialize(siteData);
-                
-                // Nettoyer les données si nécessaire
+        
+                // Nettoyage éventuel
                 if (dataToSave.activityLog && dataToSave.activityLog.length > 1000) {
                     dataToSave.activityLog = dataToSave.activityLog.slice(0, 500);
                     console.log('🧹 Nettoyage automatique des logs anciens');
                 }
-
+        
                 const serializedData = JSON.stringify(dataToSave);
-                
-                // Vérifier la taille des données avant sauvegarde
                 const dataSize = new Blob([serializedData]).size;
-                const maxSize = 8 * 1024 * 1024; // 8MB limit pour localStorage
-                
+                const maxSize = 8 * 1024 * 1024;
+        
                 if (dataSize > maxSize) {
                     console.warn('⚠️ Données volumineuses détectées, compression...');
-                    
-                    // Compression des données volumineuses
                     if (dataToSave.cvDatabase && dataToSave.cvDatabase.length > 100) {
                         dataToSave.cvDatabase = dataToSave.cvDatabase.slice(0, 100);
                         console.log('🗜️ Base CV compressée à 100 entrées');
                     }
-                    
+        
                     if (dataToSave.activityLog && dataToSave.activityLog.length > 200) {
                         dataToSave.activityLog = dataToSave.activityLog.slice(0, 200);
                         console.log('🗜️ Logs compressés à 200 entrées');
                     }
                 }
-                
-                // Tentative de sauvegarde principale
+        
+                /* ---------------------------
+                   💾 SAUVEGARDE PRINCIPALE
+                ---------------------------- */
                 localStorage.setItem('ae2i_site_data', JSON.stringify(dataToSave));
-                
-                // Double vérification de la sauvegarde
+        
                 const savedData = localStorage.getItem('ae2i_site_data');
-                if (!savedData) {
-                    throw new Error('Échec de vérification de sauvegarde');
-                }
-                
-                // Test de parsing pour s'assurer que les données sont valides
+                if (!savedData) throw new Error('Échec de vérification de sauvegarde');
+        
                 const parsedData = JSON.parse(savedData);
-                if (!parsedData || !parsedData.settings) {
-                    throw new Error('Données sauvegardées corrompues');
-                }
-                
-                // Sauvegarde de secours dans sessionStorage
+                if (!parsedData || !parsedData.settings) throw new Error('Données corrompues');
+        
                 sessionStorage.setItem('ae2i_backup_data', JSON.stringify(dataToSave));
-                
-                // Mettre à jour le timestamp de dernière sauvegarde
                 localStorage.setItem('ae2i_last_save', new Date().toISOString());
-
-                /* FIX: Re-sauvegarder currentUser APRÈS la sauvegarde */
-                localStorage.setItem('ae2i_current_user', JSON.stringify(currentUser));
-
+        
+                /* ---------------------------
+                   🔐 Re-sauvegarde currentUser
+                ---------------------------- */
+                if (currentUser && currentUser.isLoggedIn) {
+                    localStorage.setItem('ae2i_current_user', JSON.stringify(currentUser));
+                }
+        
                 console.log('✅ Données sauvegardées avec succès (vérifiées)');
                 console.log('✅ Session préservée après sauvegarde:', currentUser.username, currentUser.role);
+        
                 saveInProgress = false;
                 return true;
-                
+        
             } catch (error) {
                 console.error('❌ Erreur sauvegarde critique:', error);
                 saveInProgress = false;
-                
-                // Tentative de sauvegarde de secours
+        
                 try {
                     const minimalData = {
                         settings: siteData.settings,
@@ -1684,13 +2397,33 @@
                 }
             }
         }
-
-        // Alias pour compatibilité
+        
         function saveSiteData() {
             return forceSaveData();
         }
+        
 
         function loadSiteData() {
+            /* 🔥 FIX : restaurer la session depuis localStorage */
+try {
+    const savedUser = localStorage.getItem('ae2i_current_user');
+
+    if (savedUser) {
+        const parsed = JSON.parse(savedUser);
+
+        if (parsed && parsed.isLoggedIn) {
+            console.log("🔐 [RESTORE] Session restaurée depuis localStorage:", parsed);
+            currentUser = parsed; // <<< FIX PRINCIPAL
+        } else {
+            console.log("ℹ️ [RESTORE] Session sauvegardée = guest ou invalide");
+        }
+    } else {
+        console.log("ℹ️ [RESTORE] Aucun current_user trouvé");
+    }
+} catch (e) {
+    console.error("❌ [RESTORE] Erreur restauration session:", e);
+}
+
             try {
                 const savedData = localStorage.getItem('ae2i_site_data');
                 if (savedData) {
@@ -7896,30 +8629,30 @@ function executeLecteurScript() {
             let isSubmittingApplication = false;
 
             if (applicationForm) {
-                applicationForm.addEventListener('submit', function(e) {
+                applicationForm.addEventListener('submit', async function(e) {
                     e.preventDefault();
-
+            
                     /* FIX: prevent-double-submit - Check if already processing */
                     if (isSubmittingApplication) {
                         console.log('Form submission already in progress...');
                         return;
                     }
-
+            
                     // Vérifier le consentement
                     if (!checkConsentRequired('forms')) {
                         document.getElementById('consentRequired').style.display = 'block';
                         showNotification('Consentement requis pour soumettre une candidature', 'warning');
                         return;
                     }
-
+            
                     const jobId = parseInt(this.dataset.jobId);
                     const job = siteData.jobs.find(j => j.id == jobId);
-
+            
                     if (!job) {
                         showNotification('Erreur: Offre non trouvée', 'error');
                         return;
                     }
-
+            
                     /* ADD: candidature-validation - Collect all required fields including new ones */
                     const applicantLastName = document.getElementById('applicantLastName').value;
                     const applicantFirstName = document.getElementById('applicantFirstName').value;
@@ -7938,12 +8671,12 @@ function executeLecteurScript() {
                     const lastContractType = document.querySelector('input[name="lastContractType"]:checked')?.value;
                     const hasDriverLicense = document.querySelector('input[name="hasDriverLicense"]:checked')?.value;
                     const gender = document.querySelector('input[name="gender"]:checked')?.value;
-
+            
                     /* ADD: preavis-negociable-visual - Collect notice period data */
                     const inNotice = document.getElementById('inNotice').checked;
                     const noticeDays = document.getElementById('noticeDays').value;
                     const noticeDaysNegotiable = document.getElementById('noticeDaysNegotiable').checked;
-
+            
                     /* ADD: candidature-validation - Collect driver license details */
                     let licenseTypes = [];
                     if (hasDriverLicense === 'yes') {
@@ -7952,7 +8685,7 @@ function executeLecteurScript() {
                         });
                     }
                     const hasVehicle = document.querySelector('input[name="hasVehicle"]:checked')?.value;
-
+            
                     // ADD: candidature-validation - Comprehensive validation of all required fields
                     if (!applicantFirstName || !applicantLastName || !applicantEmail || !applicantPhone || !applicantCV ||
                         !applicantDiploma || !applicantAge || !expectedSalary || !yearsExperience ||
@@ -7967,11 +8700,9 @@ function executeLecteurScript() {
                     const originalBtnText = submitBtn.innerHTML;
                     submitBtn.disabled = true;
                     submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> <span data-fr="Envoi en cours..." data-en="Submitting..." data-ar="Envoi en cours...">Envoi en cours...</span>';
-
-                    // Lire le fichier CV
-                    const reader = new FileReader();
-                    reader.onload = function(e) {
-                        /* ADD: candidature-save-pdf - Complete application object with all fields */
+            
+                    try {
+                        // Créer l'objet application
                         const application = {
                             id: Date.now(),
                             jobId: jobId,
@@ -7990,7 +8721,7 @@ function executeLecteurScript() {
                                 name: applicantCV.name,
                                 size: applicantCV.size,
                                 type: applicantCV.type,
-                                content: e.target.result
+                                // Ne pas inclure content ici pour le moment
                             },
                             expectedSalary: expectedSalary,
                             yearsExperience: yearsExperience,
@@ -8006,60 +8737,215 @@ function executeLecteurScript() {
                             appliedAt: new Date().toISOString(),
                             processed: false,
                             consentGiven: consentStatus.accepted,
-                            pdfSummary: null  // Will be generated next
+                            pdfSummary: null
                         };
                         
-                        /* ADD: auto-generate-pdf - Generate PDF summary automatically */
-                        application.pdfSummary = generateApplicationPdfSummary(application, job);
-
-                        if (!siteData.cvDatabase) siteData.cvDatabase = [];
-                        siteData.cvDatabase.push(application);
-
-                        if (saveSiteData()) {
-                            const successMsg = siteData.language === 'en' ?
-                                `Thank you ${applicantName}! Your application has been submitted successfully.` :
-                                `Merci ${applicantName}! Votre candidature a été soumise avec succès.`;
-
-                            showNotification(successMsg, 'success');
-
-                            // Notification pour admin et recruteurs connectés
-                            if (currentUser.role === 'admin' || currentUser.role === 'recruiter') {
-                                setTimeout(() => {
-                                    showCandidateNotification(applicantName, job.title.fr, application.id);
-                                }, 2000);
+                        // Lire le fichier CV en base64 pour le stockage local
+                        const reader = new FileReader();
+                        
+                        reader.onload = async function(e) {
+                            try {
+                                // Ajouter le contenu base64 pour le stockage local
+                                application.applicantCV.content = e.target.result;
+                                application.pdfSummary = generateApplicationPdfSummary(application, job);
+                                
+                                let r2Result = null;
+                                let firebaseResult = null;
+                                
+                                // ========== MODE FIREBASE ==========
+                                if (APP_MODE === 'FIREBASE' && typeof window.firebaseHelper !== 'undefined') {
+                                    // 1. Upload le CV vers Cloudflare R2
+                                    showNotification('Upload du CV vers le cloud...', 'info');
+                                    r2Result = await uploadCVToR2(applicantCV, applicantName, job.title.fr);
+                                    
+                                    if (r2Result.success) {
+                                        // 2. Sauvegarder les métadonnées dans Firebase
+                                        showNotification('Sauvegarde des données...', 'info');
+                                        firebaseResult = await saveApplicationToFirebase(application, r2Result.url);
+                                    }
+                                }
+                                
+                                // ========== MODE LOCAL (toujours sauvegarder localement) ==========
+                                // Sauvegarder localement même en mode Firebase pour backup
+                                if (!siteData.cvDatabase) siteData.cvDatabase = [];
+                                
+                                // Ajouter l'URL R2 si upload réussi
+                                if (r2Result && r2Result.success) {
+                                    application.cvR2Url = r2Result.url;
+                                    application.cvR2Path = r2Result.path;
+                                }
+                                
+                                // Ajouter l'ID Firebase si sauvegarde réussie
+                                if (firebaseResult && firebaseResult.success) {
+                                    application.firebaseId = firebaseResult.firebaseId;
+                                }
+                                
+                                siteData.cvDatabase.push(application);
+                                
+                                // Sauvegarder localement
+                                if (saveSiteData()) {
+                                    let successMessage = '';
+                                    
+                                    if (APP_MODE === 'FIREBASE' && r2Result && r2Result.success && firebaseResult && firebaseResult.success) {
+                                        successMessage = siteData.language === 'en' ?
+                                            `✅ Thank you ${applicantName}! Your application has been submitted and saved in the cloud.` :
+                                            `✅ Merci ${applicantName}! Votre candidature a été soumise et sauvegardée dans le cloud.`;
+                                    } else {
+                                        successMessage = siteData.language === 'en' ?
+                                            `✅ Thank you ${applicantName}! Your application has been submitted successfully.` :
+                                            `✅ Merci ${applicantName}! Votre candidature a été soumise avec succès.`;
+                                    }
+                                    
+                                    showNotification(successMessage, 'success');
+                                    
+                                    // Notification pour admin et recruteurs connectés
+                                    if (currentUser.role === 'admin' || currentUser.role === 'recruiter') {
+                                        setTimeout(() => {
+                                            showCandidateNotification(applicantName, job.title.fr, application.id);
+                                        }, 2000);
+                                    }
+                                    
+                                    applicationForm.reset();
+                                    closeModal('applicationModal');
+                                    logActivity('applicant', `Candidature soumise pour ${job.title.fr} par ${applicantName}`);
+                                    
+                                } else {
+                                    throw new Error('Erreur lors de la sauvegarde locale');
+                                }
+                                
+                            } catch (error) {
+                                console.error('❌ Error in submission process:', error);
+                                
+                                // Afficher un message d'erreur approprié
+                                if (APP_MODE === 'FIREBASE' && error.message.includes('Firebase') || error.message.includes('R2')) {
+                                    showNotification('Erreur de connexion au cloud - Sauvegarde locale effectuée', 'warning');
+                                    // Forcer la sauvegarde locale
+                                    if (saveSiteData()) {
+                                        showNotification('Candidature sauvegardée localement', 'info');
+                                    }
+                                } else {
+                                    showNotification('Erreur: ' + error.message, 'error');
+                                }
+                                
+                            } finally {
+                                // Réinitialiser le bouton dans tous les cas
+                                isSubmittingApplication = false;
+                                submitBtn.disabled = false;
+                                submitBtn.innerHTML = originalBtnText;
                             }
-
-                            applicationForm.reset();
-                            closeModal('applicationModal');
-
-                            logActivity('applicant', `Candidature soumise pour ${job.title.fr} par ${applicantName}`);
-
-                            /* FIX: prevent-double-submit - Reset processing flag and button */
+                        };
+                        
+                        reader.onerror = function() {
+                            console.error('File read error');
+                            showNotification('Erreur lors de la lecture du fichier CV', 'error');
                             isSubmittingApplication = false;
                             submitBtn.disabled = false;
                             submitBtn.innerHTML = originalBtnText;
-                        } else {
-                            /* FIX: prevent-double-submit - Reset on error */
-                            isSubmittingApplication = false;
-                            submitBtn.disabled = false;
-                            submitBtn.innerHTML = originalBtnText;
-                            showNotification('Erreur lors de la sauvegarde', 'error');
-                        }
-                    };
-
-                    reader.onerror = function() {
-                        /* FIX: prevent-double-submit - Reset on file read error */
+                        };
+                        
+                        reader.readAsDataURL(applicantCV);
+                        
+                    } catch (error) {
+                        console.error('❌ General submission error:', error);
+                        showNotification('Erreur lors de la soumission: ' + error.message, 'error');
                         isSubmittingApplication = false;
                         submitBtn.disabled = false;
                         submitBtn.innerHTML = originalBtnText;
-                        showNotification('Erreur lors de la lecture du fichier CV', 'error');
-                    };
-
-                    reader.readAsDataURL(applicantCV);
+                    }
                 });
             }
         });
+        /* === UTILITY FUNCTIONS FOR FIREBASE COMPATIBILITY === */
 
+// Fonction pour vérifier si Firebase est disponible
+function isFirebaseAvailable() {
+    return typeof window.firebaseHelper !== 'undefined' && APP_MODE === 'FIREBASE';
+}
+
+// Fonction pour basculer entre les modes
+function toggleAppMode(mode) {
+    if (mode === 'LOCAL' || mode === 'FIREBASE') {
+        // Vous pouvez stocker cette préférence dans localStorage
+        localStorage.setItem('ae2i_app_mode', mode);
+        showNotification(`Mode ${mode} activé`, 'info');
+        // Recharger la page pour appliquer les changements
+        setTimeout(() => location.reload(), 1500);
+    }
+}
+
+// Fonction pour initialiser Firebase si disponible
+function initializeFirebaseIfAvailable() {
+    if (typeof window.firebaseHelper !== 'undefined') {
+        console.log('🔥 Firebase helper disponible');
+        
+        // Écouter les changements d'authentification
+        window.firebaseHelper.onAuthChange((user) => {
+            if (user) {
+                console.log('Utilisateur Firebase connecté:', user.email);
+                // Mettre à jour currentUser si nécessaire
+                if (currentUser.username === 'guest') {
+                    currentUser = {
+                        username: user.email,
+                        role: 'admin', // À déterminer depuis Firestore
+                        isLoggedIn: true,
+                        uid: user.uid,
+                        email: user.email
+                    };
+                    showNotification(`Connecté en tant que ${user.email}`, 'success');
+                }
+            } else {
+                console.log('Aucun utilisateur Firebase connecté');
+            }
+        });
+        
+        // Charger les données depuis Firebase si en mode FIREBASE
+        if (APP_MODE === 'FIREBASE') {
+            loadDataFromFirebase();
+        }
+    }
+}
+
+// Charger les données depuis Firebase
+async function loadDataFromFirebase() {
+    if (!isFirebaseAvailable()) return;
+    
+    try {
+        console.log('📡 Chargement des données depuis Firebase...');
+        
+        // Charger les paramètres
+        const settingsResult = await window.firebaseHelper.getDocument('settings', 'main');
+        if (settingsResult.success) {
+            // Fusionner les settings avec ceux existants
+            siteData.settings = { ...siteData.settings, ...settingsResult.data };
+            console.log('✅ Settings chargés depuis Firebase');
+        }
+        
+        // Charger les offres d'emploi
+        const jobsResult = await window.firebaseHelper.getCollection('jobs', [['active', '==', true]]);
+        if (jobsResult.success && jobsResult.data.length > 0) {
+            siteData.jobs = jobsResult.data;
+            console.log('✅ Jobs chargés depuis Firebase:', siteData.jobs.length);
+        }
+        
+        // Charger les services
+        const servicesResult = await window.firebaseHelper.getCollection('services', [['active', '==', true]]);
+        if (servicesResult.success && servicesResult.data.length > 0) {
+            siteData.services = servicesResult.data;
+            console.log('✅ Services chargés depuis Firebase:', siteData.services.length);
+        }
+        
+        showNotification('Données chargées depuis le cloud', 'success');
+        
+    } catch (error) {
+        console.error('❌ Erreur chargement Firebase:', error);
+        showNotification('Utilisation des données locales', 'warning');
+    }
+}
+
+// Initialiser au chargement de la page
+document.addEventListener('DOMContentLoaded', function() {
+    initializeFirebaseIfAvailable();
+});
         function setupLecteurInteractions() {
             // Update user info
             document.getElementById('lecteurCurrentUser').textContent = currentUser.username;
@@ -8395,114 +9281,188 @@ function executeLecteurScript() {
 
         // Update cache size every 1000 seconds
         setInterval(updateCacheSize, 100000);
+        
 
-        // Expose all functions globally for onclick handlers
-        window.editService = editService;
-        window.toggleService = toggleService;
-        window.deleteService = deleteService;
-        /* ADD: service-admin-ui - Exposition des nouvelles fonctions */
-        window.renderServicesConfiguration = renderServicesConfiguration;
-        window.toggleServiceConfig = toggleServiceConfig;
-        window.moveServiceUp = moveServiceUp;
-        window.moveServiceDown = moveServiceDown;
-        window.saveServicesConfiguration = saveServicesConfiguration;
-        window.editClient = editClient;
-        window.toggleClient = toggleClient;
-        window.deleteClient = deleteClient;
-        window.editTestimonial = editTestimonial;
-        window.toggleTestimonial = toggleTestimonial;
-        window.deleteTestimonial = deleteTestimonial;
-        window.editJob = editJob;
-        window.toggleJob = toggleJob;
-        window.deleteJob = deleteJob;
-        window.viewJobApplications = viewJobApplications;
-        window.editPage = editPage;
-        window.toggleSection = toggleSection;
-        window.viewPage = viewPage;
-        window.duplicatePage = duplicatePage;
-        window.deletePage = deletePage;
-        window.editUser = editUser;
-        window.toggleUser = toggleUser;
-        window.resetUserPassword = resetUserPassword;
-        window.viewUserActivity = viewUserActivity;
-        window.deleteUser = deleteUser;
-        window.deleteMessage = deleteMessage;
-        window.replyToMessage = replyToMessage;
-        window.downloadCV = downloadCV;
-        window.previewCV = previewCV;
-        window.deleteApplication = deleteApplication;
-        window.contactApplicant = contactApplicant;
-        window.editRecruteurJob = editRecruteurJob;
-        window.toggleRecruteurJob = toggleRecruteurJob;
-        window.deleteRecruteurJob = deleteRecruteurJob;
-        window.viewRecruteurApplications = viewRecruteurApplications;
-        window.downloadLecteurCV = downloadLecteurCV;
-        window.previewLecteurCV = previewLecteurCV;
-        window.updateSiteTitle = updateSiteTitle;
-        window.updateSiteSlogan = updateSiteSlogan;
-        window.updateSiteDescription = updateSiteDescription;
-        window.applyTitleGradient = applyTitleGradient;
-        window.applySloganGradient = applySloganGradient;
-        window.applyDescriptionGradient = applyDescriptionGradient;
-        window.setHeroBackground = setHeroBackground;
-        window.applyHeroGradient = applyHeroGradient;
-        window.toggleTitleFormatting = toggleTitleFormatting;
-        window.updateLanguageSettings = updateLanguageSettings;
-        window.updateThemeSettings = updateThemeSettings;
-        window.saveContactSettings = saveContactSettings;
-        window.saveSocialNetworks = saveSocialNetworks;
-        window.saveRecruitmentEmails = saveRecruitmentEmails;
-        window.addRecruitmentEmail = addRecruitmentEmail;
-        window.updateMaintenanceMessage = updateMaintenanceMessage;
-        window.saveConsentSettings = saveConsentSettings;
-        window.updateAdminProfile = updateAdminProfile;
-        window.clearCache = clearCache;
-        window.createBackup = createBackup;
-        window.anonymizeOldData = anonymizeOldData;
-        window.runPerformanceCheck = runPerformanceCheck;
-        window.connectLinkedIn = connectLinkedIn;
-        window.disconnectLinkedIn = disconnectLinkedIn;
-        window.closeModal = closeModal;
-        window.openModal = openModal;
-        window.applyMultiFilters = applyMultiFilters;
-        window.resetMultiFilters = resetMultiFilters;
-        window.toggleMultiFilter = toggleMultiFilter;
-        window.setFooterBackground = setFooterBackground;
-        window.applyFooterGradient = applyFooterGradient;
-        window.openRecruteurJobModal = openRecruteurJobModal;
-        window.viewRecruteurApplications = viewRecruteurApplications || function(jobId) {
-            console.log('Viewing applications for job:', jobId);
-            const applications = siteData.cvDatabase.filter(cv => cv.jobId === jobId);
-            console.log('Applications:', applications);
-        };
-        window.downloadLecteurCV = downloadLecteurCV || downloadCV;
-        window.previewLecteurCV = previewLecteurCV || previewCV;
-        window.executeRecruteurScript = executeRecruteurScript;
-        window.executeLecteurScript = executeLecteurScript;
-        window.renderRecruteurContent = renderRecruteurContent;
-        window.renderLecteurContent = renderLecteurContent;
-        window.setupRecruteurInteractions = setupRecruteurInteractions;
-        window.setupLecteurInteractions = setupLecteurInteractions;
-        window.openUserModal = openUserModal;
-        window.updateRoleDescription = updateRoleDescription;
-        window.exportAuditLog = exportAuditLog;
-        window.exportLecteurCVs = exportLecteurCVs;
-        window.openServiceModal = openServiceModal;
-        window.openTestimonialModal = openTestimonialModal;
-        window.openJobModal = openJobModal;
-        window.openClientModal = openClientModal;
-        window.openPageModal = openPageModal;
-        window.openApplicationForm = openApplicationForm;
-        window.exportAllCVs = exportAllCVs;
-        window.exportCVDatabase = exportCVDatabase;
-        window.exportAnalytics = exportAnalytics;
-        window.exportConsentData = exportConsentData;
-        window.generateGlobalReport = generateGlobalReport;
-        window.markAsProcessed = markAsProcessed;
-        window.markAsRead = markAsRead;
-        window.removeHeroBackground = removeHeroBackground;
-        window.removeFooterBackground = removeFooterBackground;
-        window.removeRecruitmentEmail = removeRecruitmentEmail;
+// Fonction de test d'upload CV
+async function testCVUpload() {
+    // Créer un faux fichier CV pour le test
+    const testContent = "Test CV content";
+    const blob = new Blob([testContent], { type: 'text/plain' });
+    const testFile = new File([blob], "test_cv.txt", { type: 'text/plain' });
+    
+    console.log('🧪 Test CV Upload...');
+    
+    // Appeler votre fonction d'upload
+    const result = await uploadCVToR2(testFile, "Test User", "Test Job");
+    console.log('Result:', result);
+    
+    if (result.success) {
+        alert('✅ Test upload réussi! URL: ' + result.url);
+    } else {
+        alert('❌ Test upload échoué: ' + result.error);
+    }
+}
+// ============================================
+// INITIALISATION FINALE - FIN DU FICHIER
+// ============================================
+
+// Appeler l'initialisation Firebase
+document.addEventListener('DOMContentLoaded', function() {
+    console.log('📄 DOM Content Loaded - Initialisation Firebase...');
+    initializeFirebase();
+});
+
+console.log('✅ Script chargé - Fonctions Firebase prêtes');
+
+       // ====================================================================
+// EXPOSE ALL FUNCTIONS GLOBALLY FOR ONCLICK HANDLERS - ORGANIZED LIST
+// ====================================================================
+
+// === ADMIN DASHBOARD FUNCTIONS ===
+window.editService = editService;
+window.toggleService = toggleService;
+window.deleteService = deleteService;
+window.renderServicesConfiguration = renderServicesConfiguration;
+window.toggleServiceConfig = toggleServiceConfig;
+window.moveServiceUp = moveServiceUp;
+window.moveServiceDown = moveServiceDown;
+window.saveServicesConfiguration = saveServicesConfiguration;
+window.editClient = editClient;
+window.toggleClient = toggleClient;
+window.deleteClient = deleteClient;
+window.editTestimonial = editTestimonial;
+window.toggleTestimonial = toggleTestimonial;
+window.deleteTestimonial = deleteTestimonial;
+window.editJob = editJob;
+window.toggleJob = toggleJob;
+window.deleteJob = deleteJob;
+window.viewJobApplications = viewJobApplications;
+window.editPage = editPage;
+window.toggleSection = toggleSection;
+window.viewPage = viewPage;
+window.duplicatePage = duplicatePage;
+window.deletePage = deletePage;
+window.editUser = editUser;
+window.toggleUser = toggleUser;
+window.resetUserPassword = resetUserPassword;
+window.viewUserActivity = viewUserActivity;
+window.deleteUser = deleteUser;
+window.deleteMessage = deleteMessage;
+window.replyToMessage = replyToMessage;
+window.downloadCV = downloadCV;
+window.previewCV = previewCV;
+window.deleteApplication = deleteApplication;
+window.contactApplicant = contactApplicant;
+window.markAsProcessed = markAsProcessed;
+window.markAsRead = markAsRead;
+
+window.viewRecruteurApplications = viewRecruteurApplications;
+window.filterApplications = filterApplications;
+window.exportApplicationsToCSV = exportApplicationsToCSV;
+window.exportApplicationsToPDF = exportApplicationsToPDF;
+
+// === RECRUITER DASHBOARD FUNCTIONS ===
+window.editRecruteurJob = editRecruteurJob;
+window.toggleRecruteurJob = toggleRecruteurJob;
+window.deleteRecruteurJob = deleteRecruteurJob;
+window.viewRecruteurApplications = viewRecruteurApplications;
+window.openRecruteurJobModal = openRecruteurJobModal;
+window.executeRecruteurScript = executeRecruteurScript;
+window.renderRecruteurContent = renderRecruteurContent;
+window.setupRecruteurInteractions = setupRecruteurInteractions;
+
+// === LECTEUR DASHBOARD FUNCTIONS ===
+window.downloadLecteurCV = downloadLecteurCV || downloadCV;
+window.previewLecteurCV = previewLecteurCV || previewCV;
+window.executeLecteurScript = executeLecteurScript;
+window.renderLecteurContent = renderLecteurContent;
+window.setupLecteurInteractions = setupLecteurInteractions;
+
+// === SITE SETTINGS FUNCTIONS ===
+window.updateSiteTitle = updateSiteTitle;
+window.updateSiteSlogan = updateSiteSlogan;
+window.updateSiteDescription = updateSiteDescription;
+window.applyTitleGradient = applyTitleGradient;
+window.applySloganGradient = applySloganGradient;
+window.applyDescriptionGradient = applyDescriptionGradient;
+window.setHeroBackground = setHeroBackground;
+window.applyHeroGradient = applyHeroGradient;
+window.toggleTitleFormatting = toggleTitleFormatting;
+window.updateLanguageSettings = updateLanguageSettings;
+window.updateThemeSettings = updateThemeSettings;
+window.saveContactSettings = saveContactSettings;
+window.saveSocialNetworks = saveSocialNetworks;
+window.saveRecruitmentEmails = saveRecruitmentEmails;
+window.addRecruitmentEmail = addRecruitmentEmail;
+window.updateMaintenanceMessage = updateMaintenanceMessage;
+window.saveConsentSettings = saveConsentSettings;
+window.updateAdminProfile = updateAdminProfile;
+
+// === UTILITIES & MAINTENANCE ===
+window.clearCache = clearCache;
+window.createBackup = createBackup;
+window.anonymizeOldData = anonymizeOldData;
+window.runPerformanceCheck = runPerformanceCheck;
+window.removeHeroBackground = removeHeroBackground;
+window.removeFooterBackground = removeFooterBackground;
+window.removeRecruitmentEmail = removeRecruitmentEmail;
+
+// === MODALS & UI ===
+window.connectLinkedIn = connectLinkedIn;
+window.disconnectLinkedIn = disconnectLinkedIn;
+window.closeModal = closeModal;
+window.openModal = openModal;
+window.applyMultiFilters = applyMultiFilters;
+window.resetMultiFilters = resetMultiFilters;
+window.toggleMultiFilter = toggleMultiFilter;
+window.setFooterBackground = setFooterBackground;
+window.applyFooterGradient = applyFooterGradient;
+
+// === USER MANAGEMENT ===
+window.openUserModal = openUserModal;
+window.updateRoleDescription = updateRoleDescription;
+
+// === EXPORT FUNCTIONS ===
+window.exportAuditLog = exportAuditLog;
+window.exportLecteurCVs = exportLecteurCVs;
+window.openServiceModal = openServiceModal;
+window.openTestimonialModal = openTestimonialModal;
+window.openJobModal = openJobModal;
+window.openClientModal = openClientModal;
+window.openPageModal = openPageModal;
+window.openApplicationForm = openApplicationForm;
+window.exportAllCVs = exportAllCVs;
+window.exportCVDatabase = exportCVDatabase;
+window.exportAnalytics = exportAnalytics;
+window.exportConsentData = exportConsentData;
+window.generateGlobalReport = generateGlobalReport;
+
+// === FIREBASE & CLOUDFLARE FUNCTIONS ===
+window.initializeFirebase = initializeFirebase;
+window.testFirebaseConnection = testFirebaseConnection;
+window.uploadCVToR2 = uploadCVToR2;
+window.saveApplicationToFirebase = saveApplicationToFirebase;
+window.isFirebaseAvailable = isFirebaseAvailable;
+window.toggleAppMode = toggleAppMode;
+window.initializeFirebaseIfAvailable = initializeFirebaseIfAvailable;
+window.testCVUpload = testCVUpload;
+
+// === ADDITIONAL FUNCTIONS (ensure they exist) ===
+// If these don't exist in your code, you can create simple placeholders:
+if (typeof window.viewRecruteurApplications === 'undefined') {
+    window.viewRecruteurApplications = function(jobId) {
+        console.log('Viewing applications for job:', jobId);
+        const applications = siteData.cvDatabase.filter(cv => cv.jobId === jobId);
+        console.log('Applications:', applications);
+    };
+}
+
+// ====================================================================
+// END OF GLOBAL EXPOSURE - ALL FUNCTIONS NOW AVAILABLE VIA window.*
+// ====================================================================
+
+console.log('🎉 AE2I Enhanced Ultra-Professional Site - All functions exposed globally');
+console.log('🔥 Total functions exposed:', Object.keys(window).filter(k => typeof window[k] === 'function').length);
 
         /* ADD: admin-toggle-socials-persistence - Functions to control social networks visibility with persistence */
         
@@ -9136,6 +10096,61 @@ function executeLecteurScript() {
                 showNotification('Mode hors ligne - les modifications seront synchronisées à la reconnexion', 'warning');
             });
         });
+         // --- PATCH start ---
+// Appeler ceci quand firebase est prêt (firebaseReady event dans index.html)
+window.addEventListener('firebaseReady', () => {
+    console.log('🔔 firebaseReady reçu — set up cvDatabase listener');
+
+    if (window.firebaseHelper && typeof window.firebaseHelper.listenToCollection === 'function') {
+        // Listen real-time to cvDatabase collection
+        window.firebaseHelper.listenToCollection('cvDatabase', function(docs) {
+            console.log('🔁 cvDatabase snapshot reçu, count =', docs.length);
+
+            // Convertir les timestamps Firebase en dates et normaliser champs attendus par siteData
+            const normalized = docs.map(doc => {
+                const d = { id: doc.id, ...doc };
+
+                // serverTimestamp fields -> convertir si nécessaire
+                if (d.submittedAt && d.submittedAt.toDate) {
+                    try { d.appliedAt = d.submittedAt.toDate().toISOString(); } catch(e){}
+                } else if (d.submittedAt) {
+                    d.appliedAt = (new Date(d.submittedAt)).toISOString();
+                } else if (!d.appliedAt) {
+                    d.appliedAt = new Date().toISOString();
+                }
+
+                // Alignement nom des champs si ton front attend applicantName/jobTitle, etc.
+                if (!d.applicantName) {
+                    d.applicantName = d.fullName || d.cvData?.fullName || d.applicantFullName || 'Candidat';
+                }
+                if (!d.jobTitle) {
+                    d.jobTitle = d.position || d.job || d.cvData?.position || 'Poste';
+                }
+
+                // processed flag
+                d.processed = !!d.processed;
+
+                return d;
+            });
+
+            // Remplacer siteData.cvDatabase et re-render les dashboards
+            siteData.cvDatabase = normalized;
+
+            // Re-render les vues pertinentes
+            try {
+                if (typeof renderAdminCvDatabase === 'function') renderAdminCvDatabase();
+                if (typeof renderRecruteurApplications === 'function') renderRecruteurApplications();
+                if (typeof renderLecteurCvDatabase === 'function') renderLecteurCvDatabase();
+                if (typeof updateAnalytics === 'function') updateAnalytics();
+            } catch (e) {
+                console.error('Erreur lors du re-render après sync CV:', e);
+            }
+        }, [ /* optional query constraints */ ]);
+    } else {
+        console.warn('⚠️ firebaseHelper.listenToCollection non disponible');
+    }
+});
+// --- PATCH end ---
 
         // ============================================
         // NOUVELLES FONCTIONNALITÉS DASHBOARD ADMIN
@@ -9805,3 +10820,25 @@ function executeLecteurScript() {
         window.saveLecteurAlert = saveLecteurAlert;
 
         console.log('🎉 AE2I Enhanced Ultra-Professional Site - Multi-role System with Advanced Features + Autosave Initialized Successfully');
+        // ============================================
+// FORCE GLOBAL EXPOSURE - FIN DU FICHIER
+// ============================================
+
+// Exposer tout ce qui n'est pas déjà exposé
+const globalFunctions = [
+    'testFirebaseConnection',
+    'initializeFirebase', 
+    'uploadCVToR2',
+    'saveApplicationToFirebase',
+    'isFirebaseAvailable',
+    'toggleAppMode'
+];
+
+globalFunctions.forEach(funcName => {
+    if (typeof eval(funcName) === 'function' && typeof window[funcName] === 'undefined') {
+        window[funcName] = eval(funcName);
+        console.log(`✅ ${funcName} exposée globalement`);
+    }
+});
+
+console.log('🔥 Toutes les fonctions Firebase sont maintenant disponibles via window.*');

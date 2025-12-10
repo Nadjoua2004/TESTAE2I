@@ -1,6 +1,7 @@
 // Firebase SDK v9 - Configuration et initialisation
 // Import des modules Firebase nécessaires depuis le CDN
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js';
+
 import {
     getAuth,
     signInWithEmailAndPassword,
@@ -26,7 +27,7 @@ import {
     serverTimestamp
 } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js';
 import {
-    getStorage,
+    getStorage, 
     ref,
     uploadBytes,
     getDownloadURL,
@@ -61,17 +62,30 @@ const db = getFirestore(app);
 const storage = getStorage(app);
 
 // Exporter les services et fonctions Firebase pour utilisation dans script.js
+// ==== VERSION CORRIGÉE DE window.firebaseServices (COMPATIBILITÉ V9 + ANCIEN CODE) ====
 window.firebaseServices = {
-    // Services
+    // Services Firebase
     auth,
     db,
     storage,
 
-    // Auth functions
-    signInWithEmailAndPassword,
-    signOut,
+    // Alias compatibilité Firebase v8 → v9 (important !)
+    firestore: db,
+
+    // Auth functions (compatibilité ancienne syntaxe)
+    signInWithEmailAndPassword: async (arg1, arg2, arg3) => {
+        // Permet les 2 formes :
+        //   signInWithEmailAndPassword(auth, email, pass)
+        //   firebaseServices.signInWithEmailAndPassword(email, pass)
+        if (typeof arg1 === "string") {
+            return await signInWithEmailAndPassword(auth, arg1, arg2);
+        }
+        return await signInWithEmailAndPassword(arg1, arg2, arg3);
+    },
+    signOut: () => signOut(auth),
+    createUserWithEmailAndPassword: (email, password) =>
+        createUserWithEmailAndPassword(auth, email, password),
     onAuthStateChanged,
-    createUserWithEmailAndPassword,
 
     // Firestore functions
     collection,
@@ -355,35 +369,7 @@ async submitCV(cvData, cvFile) {
         return await this.getCollection('jobs', [orderBy('createdAt', 'desc')]);
     }
 
-    async submitCV(cvData, cvFile) {
-        // Upload CV file
-        const timestamp = Date.now();
-        const fileName = `cv_${timestamp}_${cvFile.name}`;
-        const uploadResult = await this.uploadFile(`cvs/${fileName}`, cvFile);
-
-        if (!uploadResult.success) {
-            return uploadResult;
-        }
-
-        // Save CV data to Firestore
-        const cvRecord = {
-            ...cvData,
-            cvUrl: uploadResult.url,
-            cvFileName: fileName,
-            processed: false,
-            submittedAt: serverTimestamp()
-        };
-
-        return await this.addDocument('cvDatabase', cvRecord);
-    }
-
-    async submitContactMessage(messageData) {
-        return await this.addDocument('contactMessages', {
-            ...messageData,
-            read: false,
-            submittedAt: serverTimestamp()
-        });
-    }
+    
 
     async logConsent(consentData) {
         return await this.addDocument('consentLogs', {
@@ -405,22 +391,26 @@ async submitCV(cvData, cvFile) {
         });
     }
 }
-// === COMPATIBILITÉ ANCIENNE (supprime pas la version module) ===
+// === COMPATIBILITÉ ANCIENNE (VERSION CORRIGÉE – SANS ÉCRASER firebaseServices) ===
 
 // Exporter aussi en global pour compatibilité
 if (typeof window !== 'undefined') {
-    // Créer l'instance
-    const firebaseHelperInstance = new FirebaseHelper();
-    
-    // Exposer globalement
-    window.firebaseHelper = firebaseHelperInstance;
-    window.firebaseServices = {
-        auth: auth,
-        db: db,
-        storage: storage
-    };
-    
-    console.log('🔥 Firebase helper exposé globalement via window.firebaseHelper');
+    // Création d'une seule instance helper si pas déjà créée
+    if (!window.firebaseHelper) {
+        window.firebaseHelper = new FirebaseHelper();
+    }
+
+    // NE PAS recréer firebaseServices (déjà défini plus haut et corrigé)
+    if (!window.firebaseServices) {
+        window.firebaseServices = {
+            auth,
+            db,
+            storage,
+            firestore: db
+        };
+    }
+
+    console.log('🔥 Compatibilité ancienne activée (helper + services uniques)');
 }
 
 // Exporter pour modules ES6
@@ -435,4 +425,35 @@ console.log('📦 Firebase services available via window.firebaseServices');
 console.log('🛠️ Firebase helper available via window.firebaseHelper');
 
 // Export pour utilisation en tant que module
-export { app, auth, db, storage, FirebaseHelper };
+
+// === EXÉCUTION AUTOMATIQUE - AJOUTEZ CETTE SECTION À LA FIN ===
+
+// Attendre que le DOM soit chargé pour s'assurer que window existe
+if (typeof window !== 'undefined') {
+    // Exécuter après un petit délai pour s'assurer que tout est prêt
+    setTimeout(() => {
+        try {
+            // Créer et exposer l'instance
+            const helperInstance = new FirebaseHelper();
+            window.firebaseHelper = helperInstance;
+            
+            // Exposer aussi les services
+            if (!window.firebaseServices) {
+                window.firebaseServices = { auth, db, storage };
+            }
+            
+            console.log('🎉 firebaseHelper créé et exposé avec succès!');
+            console.log('✅ Méthodes disponibles:', Object.keys(helperInstance).filter(k => typeof helperInstance[k] === 'function'));
+            console.log('✅ submitCV disponible:', typeof helperInstance.submitCV === 'function');
+            
+            // Déclencher un événement pour indiquer que Firebase est prêt
+            const event = new CustomEvent('firebaseReady', { detail: { helper: helperInstance } });
+            window.dispatchEvent(event);
+            
+        } catch (error) {
+            console.error('❌ Erreur création firebaseHelper:', error);
+        }
+    }, 100);
+}
+
+console.log('✅ firebase.js terminé le chargement');

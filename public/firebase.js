@@ -7,7 +7,9 @@ import {
     signInWithEmailAndPassword,
     signOut,
     onAuthStateChanged,
-    createUserWithEmailAndPassword
+    createUserWithEmailAndPassword,
+    setPersistence,
+    browserLocalPersistence
 } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js';
 import {
     getFirestore,
@@ -58,6 +60,10 @@ const app = initializeApp(firebaseConfig);
 
 // Initialiser les services Firebase
 const auth = getAuth(app);
+// Enable persistence so Firebase Auth sessions persist across page reloads
+setPersistence(auth, browserLocalPersistence).catch((error) => {
+    console.warn('⚠️ Could not set auth persistence:', error);
+});
 const db = getFirestore(app);
 const storage = getStorage(app);
 
@@ -242,14 +248,67 @@ class FirebaseHelper {
 
         if (queryConstraints.length > 0) {
             q = query(collectionRef, ...queryConstraints);
+        } else {
+            // For cvDatabase, don't use orderBy if field might not exist on all documents
+            // This ensures we get ALL documents, not just those with the field
+            if (collectionName === 'cvDatabase') {
+                // Use basic query without orderBy to get ALL documents
+                // Firestore onSnapshot returns ALL matching documents regardless
+                console.log(`📊 [LISTENER] ${collectionName}: Using basic query (no orderBy) to get ALL documents`);
+                q = collectionRef;
+            } else {
+                // For other collections, try orderBy for consistent results
+                try {
+                    q = query(collectionRef, orderBy('createdAt', 'desc'));
+                } catch (e) {
+                    console.warn(`⚠️ [LISTENER] ${collectionName}: Could not apply orderBy, using basic query`);
+                    q = collectionRef;
+                }
+            }
         }
 
+        console.log(`🔔 [LISTENER] Setting up listener for ${collectionName} collection`);
+        
         return onSnapshot(q, (snapshot) => {
             const documents = [];
+            let docCount = 0;
             snapshot.forEach((doc) => {
+                docCount++;
                 documents.push({ id: doc.id, ...doc.data() });
             });
+            console.log(`📊 [LISTENER] ${collectionName}: Received ${documents.length} documents from snapshot (forEach count: ${docCount})`);
+            console.log(`📊 [LISTENER] ${collectionName}: Document IDs:`, documents.map(d => d.id));
+            
+            if (documents.length === 0 && collectionName === 'cvDatabase') {
+                console.warn(`⚠️ [LISTENER] ${collectionName}: No documents received!`);
+                console.warn(`⚠️ [LISTENER] This could mean:`);
+                console.warn(`  1. No documents exist in the collection`);
+                console.warn(`  2. Permission error (check Firestore rules)`);
+                console.warn(`  3. User document missing or incorrect role`);
+                console.warn(`💡 [LISTENER] Current user:`, window.currentUser);
+                console.warn(`💡 [LISTENER] Firebase Auth:`, window.firebaseServices?.auth?.currentUser);
+            }
+            
             callback(documents);
+        }, (error) => {
+            console.error(`❌ [LISTENER] ${collectionName} error:`, error);
+            console.error(`❌ [LISTENER] Error code:`, error.code);
+            console.error(`❌ [LISTENER] Error message:`, error.message);
+            
+            if (error.code === 'permission-denied' && collectionName === 'cvDatabase') {
+                console.error(`🔴 [LISTENER] PERMISSION DENIED for cvDatabase!`);
+                console.error(`🔴 [LISTENER] Current user:`, window.currentUser);
+                console.error(`🔴 [LISTENER] User UID:`, window.currentUser?.uid);
+                console.error(`🔴 [LISTENER] User role:`, window.currentUser?.role);
+                console.error(`🔴 [LISTENER] Firebase Auth user:`, window.firebaseServices?.auth?.currentUser);
+                console.error(`💡 [LISTENER] Check:`);
+                console.error(`  1. Firestore rules are deployed`);
+                console.error(`  2. User document exists in /users/{uid} with correct role`);
+                console.error(`  3. User role is 'recruiter', 'admin', or 'reader'`);
+                console.error(`💡 [LISTENER] Try running: await fixUserPermissions()`);
+            }
+            
+            callback([]);
         });
     }
 

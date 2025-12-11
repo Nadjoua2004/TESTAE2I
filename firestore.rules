@@ -7,28 +7,49 @@ service cloud.firestore {
       return request.auth != null;
     }
 
+    function getUserRole() {
+      return isAuthenticated() && 
+             exists(/databases/$(database)/documents/users/$(request.auth.uid))
+             ? get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role
+             : null;
+    }
+
+    function getUserPermissions() {
+      return isAuthenticated() && 
+             exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+             get(/databases/$(database)/documents/users/$(request.auth.uid)).data.permissions != null
+             ? get(/databases/$(database)/documents/users/$(request.auth.uid)).data.permissions
+             : [];
+    }
+
     function isAdmin() {
-      return isAuthenticated() &&
-             get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+      return isAuthenticated() && getUserRole() == 'admin';
     }
 
     function isRecruiter() {
-      return isAuthenticated() &&
-             (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'recruiter' ||
-              get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin');
+      // Recruiter role (English) OR recruteur role (French) OR admin role grants access
+      return isAuthenticated() && 
+             (getUserRole() == 'recruiter' || getUserRole() == 'recruteur' || getUserRole() == 'admin');
     }
 
     function isReader() {
-      return isAuthenticated() &&
-             (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'reader' ||
-              get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'recruiter' ||
-              get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin');
+      // Reader, recruiter/recruteur, or admin roles can read cvDatabase
+      return isAuthenticated() && 
+             (getUserRole() == 'reader' || getUserRole() == 'lecteur' || 
+              getUserRole() == 'recruiter' || getUserRole() == 'recruteur' || 
+              getUserRole() == 'admin');
     }
 
-    // Users collection - Admin only
+    // Users collection - Users can create/update their own document, admin can do all
     match /users/{userId} {
+      // Allow read if authenticated (for getUserRole function)
       allow read: if isAuthenticated();
-      allow create, update, delete: if isAdmin();
+      // Allow create if user is creating their own document (by UID match)
+      allow create: if isAuthenticated() && request.auth.uid == userId;
+      // Allow update if user is updating their own document OR if admin
+      allow update: if isAuthenticated() && (request.auth.uid == userId || isAdmin());
+      // Only admin can delete
+      allow delete: if isAdmin();
     }
 
     // Site settings - Admin only
@@ -49,10 +70,13 @@ service cloud.firestore {
       allow create, update, delete: if isRecruiter();
     }
 
-    // CV Database - Recruiter and Admin can read/write
+    // CV Database - Allow read for authenticated users with reader/recruiter/admin roles
     match /cvDatabase/{cvId} {
+      // Allow read if user has reader/lecteur, recruiter/recruteur, or admin role
       allow read: if isReader();
-      allow create: if true; // Anyone can submit a CV
+      // Anyone can submit a CV
+      allow create: if true;
+      // Allow update/delete for recruiter/recruteur and admin
       allow update, delete: if isRecruiter();
     }
 

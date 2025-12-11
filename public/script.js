@@ -12,6 +12,126 @@ workerUrl: 'https://upload-ae2i.ae2ialgerie2025.workers.dev',
 publicUrl: 'https://pub-298ee83d49284d7cc8b8c2eac280bf44.r2.dev/ae2i-cvs-algerie'
 };
 
+// Mapping explicite email -> rôle (secours si Firestore est indisponible/incomplet)
+const EMAIL_ROLE_MAP = {
+    'selmabdf@gmail.com': 'admin',
+    'recruiter@ae2i-algerie.com': 'recruteur',
+    'reader@ae2i-algerie.com': 'lecteur'
+};
+
+// Récupère le rôle utilisateur depuis Firestore (par UID puis par email)
+async function hydrateUserFromFirestore(fbUser) {
+    const helper = window.firebaseHelper;
+    const svc = window.firebaseServices;
+    // Fallback depuis la session sauvegardée (localStorage) pour conserver le rôle admin si Firestore ne le fournit pas
+    let savedRole = 'lecteur';
+    try {
+        const saved = localStorage.getItem('ae2i_current_user');
+        if (saved) {
+            const parsed = JSON.parse(saved);
+            if (parsed?.role) savedRole = parsed.role;
+        }
+    } catch (e) {
+        console.warn('Fallback role read error:', e);
+    }
+
+    if (!helper || !svc) {
+        return {
+            username: fbUser.email,
+            email: fbUser.email,
+            role: EMAIL_ROLE_MAP[fbUser.email] || savedRole || 'lecteur',
+            isLoggedIn: true,
+            uid: fbUser.uid
+        };
+    }
+
+    // 1) Essayer par UID
+    let userDoc = await helper.getDocument('users', fbUser.uid);
+
+    // 2) Sinon essayer par email (cas où les docs ne sont pas nommés par UID)
+    if (!userDoc.success || !userDoc.data) {
+        const whereEmail = svc.where ? svc.where('email', '==', fbUser.email) : null;
+        const limiter = svc.limit ? svc.limit(1) : null;
+        const constraints = [whereEmail, limiter].filter(Boolean);
+        const byEmail = await helper.getCollection('users', constraints);
+        if (byEmail.success && byEmail.data && byEmail.data.length > 0) {
+            userDoc = { success: true, data: byEmail.data[0] };
+        }
+    }
+
+    // 3) Fallback : tenter des documents nommés par rôle (admin/recruteur/lecteur)
+    if (!userDoc.success || !userDoc.data) {
+        const roleIds = ['admin', 'recruteur', 'lecteur'];
+        for (const rid of roleIds) {
+            const tryDoc = await helper.getDocument('users', rid);
+            if (tryDoc.success && tryDoc.data) {
+                // Vérifier email si disponible, sinon accepter le rôle direct
+                if (!tryDoc.data.email || tryDoc.data.email === fbUser.email) {
+                    userDoc = tryDoc;
+                    break;
+                }
+            }
+        }
+    }
+
+    const roleRaw = userDoc.success && userDoc.data
+        ? (userDoc.data.role || EMAIL_ROLE_MAP[fbUser.email] || savedRole || 'lecteur')
+        : (EMAIL_ROLE_MAP[fbUser.email] || savedRole || 'lecteur');
+    const role = typeof roleRaw === 'string' ? roleRaw.toLowerCase() : (EMAIL_ROLE_MAP[fbUser.email] || savedRole || 'lecteur');
+    return {
+        username: fbUser.email,
+        email: fbUser.email,
+        role,
+        isLoggedIn: true,
+        uid: fbUser.uid
+    };
+}
+
+// Ensure user document exists in Firestore with correct role (for security rules)
+async function ensureUserDocumentInFirestore(uid, email, role) {
+    if (!window.firebaseHelper || !uid) return;
+    
+    try {
+        // Check if user document exists
+        const userDoc = await window.firebaseHelper.getDocument('users', uid);
+        
+        if (!userDoc.success || !userDoc.data) {
+            // Create user document if it doesn't exist
+            console.log('📝 [USER DOC] Creating user document in Firestore:', { uid, email, role });
+            const result = await window.firebaseHelper.setDocument('users', uid, {
+                email: email,
+                role: role,
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString()
+            }, false); // false = don't merge, create new
+            
+            if (result.success) {
+                console.log('✅ [USER DOC] User document created successfully');
+            } else {
+                console.warn('⚠️ [USER DOC] Failed to create user document:', result.error);
+            }
+        } else {
+            // Update role if it's different
+            const currentRole = userDoc.data.role;
+            if (currentRole !== role) {
+                console.log('📝 [USER DOC] Updating user role:', { uid, oldRole: currentRole, newRole: role });
+                const result = await window.firebaseHelper.updateDocument('users', uid, {
+                    role: role,
+                    updatedAt: new Date().toISOString()
+                });
+                
+                if (result.success) {
+                    console.log('✅ [USER DOC] User role updated successfully');
+                } else {
+                    console.warn('⚠️ [USER DOC] Failed to update user role:', result.error);
+                }
+            }
+        }
+    } catch (error) {
+        console.error('❌ [USER DOC] Error ensuring user document:', error);
+    }
+}
+
 // ====================================================
 // FIREBASE FUNCTIONS - AJOUTER ICI (APRÈS R2_CONFIG)
 // ====================================================
@@ -39,32 +159,14 @@ if (!fbUser) {
 
 console.log("🔐 [AUTH] Firebase user connecté:", fbUser.email);
 
-// charger le rôle depuis Firestore (collection users)
-const db = window.firebaseServices.firestore;
-const ref = db.collection("users").doc(fbUser.uid);
-const snap = await ref.get();
-
-if (!snap.exists) {
-    console.warn("⚠️ Aucun document user trouvé pour cet UID !");
-    currentUser = {
-        username: fbUser.email,
-        role: "lecteur",
-        isLoggedIn: true
-    };
-} else {
-    const userData = snap.data();
-    currentUser = {
-        username: fbUser.email,
-        email: fbUser.email,
-        role: userData.role || "lecteur",
-        isLoggedIn: true
-    };
-}
+// Charger le rôle depuis Firestore (UID puis fallback email)
+window.currentUser = await hydrateUserFromFirestore(fbUser);
 
 console.log("🟩 [AUTH] currentUser mis à jour depuis Firestore:", window.currentUser);
 
 // mettre à jour l'UI
 updateLoginStatus();
+updateLoginButton();
 });
 }
 
@@ -136,6 +238,14 @@ return { success: false, error: error.message };
 
 (function restoreUserEarly() {
 try {
+// Vérifier le flag de logout AVANT de restaurer la session
+const loggedOutFlag = localStorage.getItem('ae2i_logged_out');
+if (loggedOutFlag === 'true') {
+    console.log("⏸️ [EARLY RESTORE] Flag de logout détecté, skip restauration session");
+    window.currentUser = { username: "guest", role: "guest", isLoggedIn: false };
+    return;
+}
+
 const saved = localStorage.getItem("ae2i_current_user");
 console.log("🟦 EARLY RESTORE: saved session =", saved);
 
@@ -835,25 +945,31 @@ if (typeof window.firebaseHelper === 'undefined') {
 }
 
 console.log('🔥 [FIREBASE] Saving application...');
+console.log('🔥 [FIREBASE] Application data:', JSON.stringify(applicationData, null, 2));
+
+// Extraire les informations CV avant de modifier l'objet
+const cvFileName = applicationData.applicantCV?.name || applicationData.cvFileName || 'unknown.pdf';
+const cvFileSize = applicationData.applicantCV?.size || applicationData.cvFileSize || 0;
+const cvFileType = applicationData.applicantCV?.type || applicationData.cvFileType || 'application/pdf';
 
 // Préparer les données pour Firebase
 const firebaseApplication = {
     ...applicationData,
     cvUrl: cvUrl || null, // URL R2 si disponible
-    applicantCV: null, // Ne pas stocker le fichier en base64
-    cvFileName: applicationData.applicantCV.name,
-    cvFileSize: applicationData.applicantCV.size,
-    cvFileType: applicationData.applicantCV.type,
-    status: 'new',
+    cvFileName: cvFileName,
+    cvFileSize: cvFileSize,
+    cvFileType: cvFileType,
+    status: applicationData.status || 'new',
     source: 'website_form',
-    submittedAt: new Date().toISOString()
+    submittedAt: applicationData.submittedAt || new Date().toISOString()
 };
 
-// Supprimer le contenu du fichier base64 pour économiser de l'espace
-delete firebaseApplication.applicantCV.content;
+// Supprimer le fichier CV de l'objet (ne pas stocker en base64)
+delete firebaseApplication.applicantCV;
+delete firebaseApplication.applicantCV?.content;
 
-// Sauvegarder dans Firestore
-const result = await window.firebaseHelper.addDocument('cv_submissions', firebaseApplication);
+// Sauvegarder dans Firestore (collection cvDatabase pour correspondre au listener)
+const result = await window.firebaseHelper.addDocument('cvDatabase', firebaseApplication);
 
 if (result.success) {
     console.log('✅ [FIREBASE] Application saved with ID:', result.id);
@@ -1351,35 +1467,82 @@ function saveConsentSettings() {
 
 // Système de navigation multipage
 function showPage(pageId, addToHistory = true) {
-    if (siteData.settings.maintenanceMode && currentUser.role !== 'admin' && pageId !== 'maintenance') {
+    console.log('🚀 [SHOW PAGE] START - pageId:', pageId, 'addToHistory:', addToHistory);
+    
+    // S'assurer que currentUser est à jour avant d'afficher la page
+    const savedSession = localStorage.getItem('ae2i_current_user');
+    if (savedSession && (!currentUser || !currentUser.isLoggedIn || currentUser.role === 'guest')) {
+        try {
+            const parsed = JSON.parse(savedSession);
+            if (parsed && parsed.isLoggedIn && parsed.role && !justLoggedOut) {
+                console.log('🔄 [SHOW PAGE] Mise à jour currentUser depuis localStorage:', parsed.role);
+                currentUser = parsed;
+            }
+        } catch (e) {
+            console.warn('⚠️ [SHOW PAGE] Erreur parsing session:', e);
+        }
+    }
+    
+    const roleLc = (currentUser?.role || '').toLowerCase();
+    console.log('[PAGE] showPage called with', pageId, 'addToHistory=', addToHistory, 'role=', roleLc, 'currentUser:', JSON.stringify(currentUser));
+
+    if (siteData.settings.maintenanceMode && roleLc !== 'admin' && pageId !== 'maintenance') {
         pageId = 'maintenance';
     }
 
-    if (!checkPageAccess(pageId)) {
+    console.log('[PAGE] About to check access for', pageId);
+    const hasAccess = checkPageAccess(pageId);
+    console.log('[PAGE] Access check result for', pageId, ':', hasAccess);
+    if (!hasAccess) {
+        console.log('[PAGE] ❌ ACCESS DENIED for', pageId);
         return;
     }
+    console.log('[PAGE] ✅ ACCESS GRANTED for', pageId);
 
     document.querySelectorAll('.page-section').forEach(section => {
         section.classList.remove('active', 'fade-in');
     });
 
     const targetSection = document.getElementById(`${pageId}-page`);
+    console.log('[PAGE] Looking for element:', `${pageId}-page`, 'Found:', !!targetSection);
     if (targetSection) {
+        console.log('[PAGE] ✅ Element found, activating...');
         targetSection.classList.add('active', 'fade-in');
         currentPage = pageId;
+        console.log('[PAGE] activated', `${pageId}-page`, 'active?', targetSection.classList.contains('active'));
 
         updateNavigation(pageId);
+        console.log('[PAGE] Navigation updated');
 
         if (addToHistory) {
             window.history.pushState({ page: pageId }, '', `#${pageId}`);
+            console.log('[PAGE] History updated');
         }
 
         window.scrollTo({ top: 0, behavior: 'smooth' });
+        console.log('[PAGE] Scrolled to top');
 
         triggerPageScript(pageId);
+        console.log('[PAGE] Page script triggered');
+        
+        // Show logout button for dashboard pages
+        if (pageId === 'admin' || pageId === 'recruteur' || pageId === 'lecteur') {
+            const logoutBtn = targetSection.querySelector('.btn-logout');
+            if (logoutBtn) {
+                logoutBtn.style.display = 'flex';
+                console.log('[PAGE] Logout button shown for', pageId);
+            } else {
+                console.warn('[PAGE] Logout button not found in', pageId);
+            }
+        }
 
         logActivity(currentUser.username || 'visitor', `Navigation vers page ${pageId}`);
+        console.log('[PAGE] ✅ Page display completed for', pageId);
+    } else {
+        console.error('[PAGE] ❌ target section not found for', pageId, '- Element ID:', `${pageId}-page`);
+        console.error('[PAGE] Available page sections:', Array.from(document.querySelectorAll('.page-section')).map(s => s.id));
     }
+    console.log('🏁 [SHOW PAGE] END - pageId:', pageId);
 }
 
 function updateNavigation(activePageId) {
@@ -1431,7 +1594,22 @@ function translatePage(lang) {
 }
 
 function checkPageAccess(pageId) {
+    // S'assurer que currentUser est à jour avant de vérifier l'accès
+    const savedSession = localStorage.getItem('ae2i_current_user');
+    if (savedSession && (!currentUser || !currentUser.isLoggedIn || currentUser.role === 'guest')) {
+        try {
+            const parsed = JSON.parse(savedSession);
+            if (parsed && parsed.isLoggedIn && parsed.role) {
+                console.log('🔄 [ACCESS CHECK] Mise à jour currentUser depuis localStorage:', parsed.role);
+                currentUser = parsed;
+            }
+        } catch (e) {
+            console.warn('⚠️ [ACCESS CHECK] Erreur parsing session:', e);
+        }
+    }
+    
     console.log('🔍 [ACCESS CHECK] Page:', pageId, 'currentUser:', JSON.stringify(currentUser));
+    const roleLc = (currentUser?.role || '').toLowerCase();
 
     if (siteData.settings.maintenanceMode && currentUser.role !== 'admin' && pageId !== 'maintenance') {
         console.log('❌ [ACCESS CHECK] Bloqué par mode maintenance');
@@ -1444,23 +1622,29 @@ function checkPageAccess(pageId) {
         return false;
     }
 
-    /* FIX: Ajouter logs d\u00e9taill\u00e9s pour debug acc\u00e8s admin */
-    if (pageId === 'admin' && currentUser.role !== 'admin') {
-        console.log('\u274c [ACCESS CHECK] Pas admin - Role actuel:', currentUser.role, 'isLoggedIn:', currentUser.isLoggedIn);
-        console.log('\u274c [ACCESS CHECK] currentUser complet:', JSON.stringify(currentUser));
-        console.log('\u274c [ACCESS CHECK] Session localStorage:', localStorage.getItem('ae2i_current_user'));
-        showNotification(siteData.language === 'en' ? 'Administrator access required' : 'Acc\u00e8s administrateur requis', 'error');
-        showPage('home');
-        return false;
+    /* FIX: Ajouter logs détaillés pour debug accès admin */
+    console.log('🔍 [ACCESS CHECK] Vérification admin - pageId:', pageId, 'roleLc:', roleLc, 'roleLc === "admin":', roleLc === 'admin');
+    if (pageId === 'admin') {
+        if (roleLc === 'admin') {
+            console.log('✅ [ACCESS CHECK] Accès admin autorisé - role:', roleLc);
+            return true;
+        } else {
+            console.log('❌ [ACCESS CHECK] Pas admin - Role actuel:', currentUser?.role, 'roleLc:', roleLc, 'isLoggedIn:', currentUser?.isLoggedIn);
+            console.log('❌ [ACCESS CHECK] currentUser complet:', JSON.stringify(currentUser));
+            console.log('❌ [ACCESS CHECK] Session localStorage:', localStorage.getItem('ae2i_current_user'));
+            showNotification(siteData.language === 'en' ? 'Administrator access required' : 'Accès administrateur requis', 'error');
+            // Ne pas appeler showPage('home') ici pour éviter la récursion
+            return false;
+        }
     }
     
-    if (pageId === 'recruteur' && currentUser.role !== 'recruiter' && currentUser.role !== 'recruteur' && currentUser.role !== 'admin') {
+    if (pageId === 'recruteur' && roleLc !== 'recruiter' && roleLc !== 'recruteur' && roleLc !== 'admin') {
         showNotification(siteData.language === 'en' ? 'Recruiter access required' : 'Accès recruteur requis', 'error');
         showPage('home');
         return false;
     }
 
-    if (pageId === 'lecteur' && currentUser.role !== 'reader' && currentUser.role !== 'lecteur' && currentUser.role !== 'admin') {
+    if (pageId === 'lecteur' && roleLc !== 'reader' && roleLc !== 'lecteur' && roleLc !== 'admin') {
         showNotification(siteData.language === 'en' ? 'Reader access required' : 'Accès lecteur requis', 'error');
         showPage('home');
         return false;
@@ -1499,12 +1683,42 @@ function setupNavigation() {
         showPage('home', false);
     }
 }
+// Helper: route to dashboard based on role
+function routeToDashboard(role) {
+    const r = (role || '').toLowerCase();
+    console.log('[NAV] routeToDashboard role=', r, 'currentUser=', JSON.stringify(currentUser));
+    try {
+        if (r === 'admin') {
+            console.log('[NAV] showPage(admin) - calling now...');
+            showPage('admin');
+            console.log('[NAV] showPage(admin) - call completed');
+        } else if (r === 'recruteur' || r === 'recruiter') {
+            console.log('[NAV] showPage(recruteur)');
+            showPage('recruteur');
+        } else if (r === 'lecteur' || r === 'reader') {
+            console.log('[NAV] showPage(lecteur)');
+            showPage('lecteur');
+        } else {
+            console.log('[NAV] showPage(home) fallback');
+            showPage('home');
+        }
+    } catch (error) {
+        console.error('[NAV] ❌ Error in routeToDashboard:', error);
+        console.error('[NAV] Error stack:', error.stack);
+    }
+}
+
 // 🔐 Login via Firebase Auth
 async function loginFirebase(email, password) {
     try {
-        const auth = window.firebaseServices.auth;
-        // Use the imported function from firebase-auth.js
-        const userCredential = await window.firebaseHelper.login(email, password)
+        const auth = window.firebaseServices?.auth || window.auth;
+        if (!auth || !window.firebaseHelper?.login) {
+            console.error('❌ Firebase Auth non disponible (firebaseServices/auth manquant)');
+            showNotification('Firebase non initialisé, rechargez la page (Ctrl+Shift+R)', 'error');
+            return null;
+        }
+        // Use the helper (wraps signInWithEmailAndPassword)
+        const userCredential = await window.firebaseHelper.login(email, password);
     
         console.log("✅ Firebase Auth login réussi:", userCredential.user);
         // currentUser sera automatiquement mis à jour via onAuthStateChanged
@@ -1518,58 +1732,182 @@ async function loginFirebase(email, password) {
 // 🚪 Logout
 async function logoutFirebase() {
     try {
-        const auth = window.firebaseServices.auth;
-        await auth.signOut();
-        console.log("✅ Utilisateur déconnecté");
+        console.log('🔴 [LOGOUT FIREBASE] Déconnexion en cours...');
+        
+        // Log activity before logout
+        if (currentUser && currentUser.username && currentUser.username !== 'guest') {
+            logActivity(currentUser.username, 'Déconnexion');
+        }
+        
+        // Sign out from Firebase
+        const signOutFn = window.firebaseServices?.signOut;
+        if (typeof signOutFn === 'function') {
+            await signOutFn();
+        } else if (window.firebaseServices?.auth?.signOut) {
+            // Fallback compat
+            await window.firebaseServices.auth.signOut();
+        } else if (window.firebaseHelper?.logout) {
+            // Use FirebaseHelper logout
+            await window.firebaseHelper.logout();
+        }
+        
+        // Clear user data
         window.currentUser = { username: "guest", role: "guest", isLoggedIn: false };
-        updateLoginStatus(); // Met à jour l'UI
+        localStorage.removeItem('ae2i_current_user');
+        sessionStorage.clear();
+        
+        // Set persistent logout flag to prevent session restoration on page reload
+        localStorage.setItem('ae2i_logged_out', 'true');
+        justLoggedOut = true;
+        
+        // Clear the logout flag only when user successfully logs in again (not on timeout)
+        
+        // Reset initial auth check flag
+        isInitialAuthCheck = true;
+        
+        // Close any open menus/dropdowns
+        const userDropdown = document.getElementById('userDropdown');
+        if (userDropdown) {
+            userDropdown.classList.remove('show');
+        }
+        const mobileMenuPanel = document.getElementById('mobileMenuPanel');
+        const mobileMenuOverlay = document.getElementById('mobileMenuOverlay');
+        if (mobileMenuPanel) mobileMenuPanel.classList.remove('show');
+        if (mobileMenuOverlay) mobileMenuOverlay.classList.remove('show');
+        
+        // Update UI
+        updateLoginButton();
+        updateLoginStatus();
+        
+        // Route to home page
+        showPage('home');
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+        
+        // Show success notification
+        const logoutMsg = siteData.language === 'en' ? 'Successfully logged out' : 'Déconnexion réussie';
+        showNotification(logoutMsg, 'success');
+        
+        console.log("✅ [LOGOUT FIREBASE] Utilisateur déconnecté avec succès");
     } catch (error) {
-        console.error("❌ Erreur déconnexion:", error);
+        console.error("❌ [LOGOUT FIREBASE] Erreur déconnexion:", error);
         showNotification("Erreur logout: " + error.message, "error", 5000);
+        
+        // Even if Firebase logout fails, clear local state
+        window.currentUser = { username: "guest", role: "guest", isLoggedIn: false };
+        localStorage.removeItem('ae2i_current_user');
+        updateLoginButton();
+        updateLoginStatus();
+        showPage('home');
     }
 }
 // 🔄 Sync automatique de currentUser depuis Firebase Auth
+let isInitialAuthCheck = true; // Flag pour distinguer chargement initial vs login
+let justLoggedOut = false; // Flag pour empêcher la restauration de session après logout
 function listenFirebaseAuth() {
     if (APP_MODE !== "FIREBASE") return;
 
     const auth = window.firebaseServices.auth;
     auth.onAuthStateChanged(async (fbUser) => {
-        console.log("🔄 [AUTH] Firebase Auth changed:", fbUser);
+        console.log("🔄 [AUTH] Firebase Auth changed:", fbUser, "isInitialAuthCheck:", isInitialAuthCheck);
 
         if (!fbUser) {
+            // Vérifier le flag de logout persistant AVANT de restaurer la session
+            const loggedOutFlag = localStorage.getItem('ae2i_logged_out');
+            if (loggedOutFlag === 'true' || justLoggedOut) {
+                console.log("⏸️ [AUTH] Logout détecté (flag persistant ou récent), skip restauration session");
+                currentUser = { username: "guest", role: "guest", isLoggedIn: false };
+                localStorage.removeItem('ae2i_current_user');
+                updateLoginStatus();
+                updateLoginButton();
+                isInitialAuthCheck = false;
+                return;
+            }
+            
+            // Si aucune session Firebase mais une session locale existe, 
+            // NE PAS restaurer pour Firestore (car règles nécessitent Firebase Auth)
+            // Mais on peut garder pour l'UI et suggérer de se reconnecter
+            const saved = localStorage.getItem('ae2i_current_user');
+            if (saved) {
+                try {
+                    const parsed = JSON.parse(saved);
+                    const mapped = EMAIL_ROLE_MAP[parsed.email];
+                    if (mapped) parsed.role = mapped;
+                    // Keep for UI display but mark as not authenticated with Firebase
+                    currentUser = { ...parsed, isLoggedIn: false, firebaseAuth: false };
+                    console.log("⚠️ [AUTH] Firebase Auth null - localStorage user found but NOT authenticated with Firebase");
+                    console.log("⚠️ [AUTH] Firestore operations will fail until Firebase Auth login");
+                    console.log("💡 [AUTH] User should log in through Firebase Auth to access Firestore");
+                    updateLoginStatus();
+                    updateLoginButton();
+                    // Clear localStorage user since Firebase Auth is required
+                    // localStorage.removeItem('ae2i_current_user');
+                    isInitialAuthCheck = false;
+                    return;
+                } catch (e) {
+                    console.warn('Erreur lecture session locale:', e);
+                }
+            }
             console.log("👤 [AUTH] Aucun utilisateur connecté → currentUser = guest");
             currentUser = { username: "guest", role: "guest", isLoggedIn: false };
             updateLoginStatus();
+            isInitialAuthCheck = false;
             return;
         }
 
         console.log("🔐 [AUTH] Firebase user connecté:", fbUser.email);
 
-        // récupérer le rôle depuis Firestore
-        const db = window.firebaseServices.firestore;
-        const ref = db.collection("users").doc(fbUser.uid);
-        const snap = await ref.get();
-
-        if (!snap.exists) {
-            console.warn("⚠️ Aucun document user trouvé pour cet UID !");
-            window.currentUser = {
-                username: fbUser.email,
-                email: fbUser.email,
-                role: "lecteur",
-                isLoggedIn: true
-            };
-        } else {
-            const userData = snap.data();
-            window.currentUser = {
-                username: fbUser.email,
-                email: fbUser.email,
-                role: userData.role || "lecteur",
-                isLoggedIn: true
-            };
+        // Vérifier le flag de logout AVANT de restaurer la session
+        const loggedOutFlag = localStorage.getItem('ae2i_logged_out');
+        if (loggedOutFlag === 'true') {
+            console.log("⏸️ [AUTH] Logout flag détecté malgré Firebase Auth actif - forcer déconnexion");
+            // Force sign out if logout flag is set
+            try {
+                if (window.firebaseServices?.auth?.signOut) {
+                    await window.firebaseServices.auth.signOut();
+                } else if (window.firebaseHelper?.logout) {
+                    await window.firebaseHelper.logout();
+                }
+            } catch (e) {
+                console.error('Erreur lors de la déconnexion forcée:', e);
+            }
+            currentUser = { username: "guest", role: "guest", isLoggedIn: false };
+            localStorage.removeItem('ae2i_current_user');
+            updateLoginStatus();
+            updateLoginButton();
+            return;
         }
+
+        // Clear logout flag when user successfully logs in
+        localStorage.removeItem('ae2i_logged_out');
+        justLoggedOut = false;
+
+        // Récupérer le rôle depuis Firestore (UID puis email)
+        window.currentUser = await hydrateUserFromFirestore(fbUser);
+        // Forcer mapping explicite si défini
+        const mappedRole = EMAIL_ROLE_MAP[fbUser.email];
+        if (mappedRole && window.currentUser.role !== mappedRole) {
+            window.currentUser.role = mappedRole;
+        }
+        
+        // Ensure user document exists in Firestore with correct role (for permissions)
+        await ensureUserDocumentInFirestore(fbUser.uid, fbUser.email, window.currentUser.role);
+        
+        // Persister la session résolue
+        localStorage.setItem('ae2i_current_user', JSON.stringify(window.currentUser));
 
         console.log("🟩 [AUTH] currentUser mis à jour depuis Firestore:", window.currentUser);
         updateLoginStatus();
+        updateLoginButton();
+        
+        // Router vers le dashboard uniquement si ce n'est pas le chargement initial
+        // (pour éviter de router automatiquement au refresh de page)
+        if (!isInitialAuthCheck) {
+            console.log("🚀 [AUTH] Routing to dashboard for role:", window.currentUser.role);
+            routeToDashboard(window.currentUser.role);
+        } else {
+            console.log("⏸️ [AUTH] Initial auth check - skipping auto-routing");
+        }
+        isInitialAuthCheck = false;
     });
 }
 function initializeFirebase() {
@@ -1604,20 +1942,80 @@ function setupLoginSystem() {
 
     loginBtn.addEventListener('click', function(e) {
         e.stopPropagation();
-        if (currentUser.isLoggedIn) {
-            // Si connecté, rediriger vers le dashboard approprié
-            console.log('🔍 [LOGIN BTN CLICK] Utilisateur connecté:', currentUser.role);
-            if (currentUser.role === 'admin') {
-                showPage('admin');
-            } else if (currentUser.role === 'recruiter' || currentUser.role === 'recruteur') {
-                showPage('recruteur');
-            } else if (currentUser.role === 'reader' || currentUser.role === 'lecteur') {
-                showPage('lecteur');
+        
+        // Vérifier l'état réel de connexion (vérifier aussi localStorage pour être sûr)
+        const savedSession = localStorage.getItem('ae2i_current_user');
+        let isActuallyLoggedIn = false;
+        
+        if (currentUser && currentUser.isLoggedIn) {
+            isActuallyLoggedIn = true;
+        } else if (savedSession) {
+            try {
+                const parsed = JSON.parse(savedSession);
+                if (parsed && parsed.isLoggedIn) {
+                    isActuallyLoggedIn = true;
+                }
+            } catch (e) {
+                // Ignore parse errors
+            }
+        }
+        
+        // Vérifier aussi Firebase Auth
+        const fbAuth = window.firebaseServices?.auth;
+        const fbUser = fbAuth?.currentUser;
+        if (fbUser) {
+            isActuallyLoggedIn = true;
+        }
+        
+        if (isActuallyLoggedIn && !justLoggedOut) {
+            // Si connecté, rediriger vers le dashboard approprié (pas déconnecter!)
+            // S'assurer que currentUser est à jour avant de router
+            let userRole = currentUser?.role;
+            
+            // Si currentUser n'est pas à jour, essayer de le récupérer depuis localStorage ou Firebase
+            if (!userRole || userRole === 'guest') {
+                if (savedSession) {
+                    try {
+                        const parsed = JSON.parse(savedSession);
+                        if (parsed && parsed.role) {
+                            userRole = parsed.role;
+                            currentUser = parsed;
+                            console.log('🔄 [LOGIN BTN] currentUser mis à jour depuis localStorage:', currentUser);
+                        }
+                    } catch (e) {
+                        console.warn('Erreur parsing session:', e);
+                    }
+                }
+                
+                // Si toujours pas de rôle, vérifier Firebase Auth
+                if ((!userRole || userRole === 'guest') && fbUser) {
+                    console.log('🔄 [LOGIN BTN] Tentative récupération rôle depuis Firebase...');
+                    // Ne pas bloquer, utiliser routeToDashboard qui gère ça
+                }
+            }
+            
+            console.log('🔍 [LOGIN BTN CLICK] Utilisateur connecté, redirection vers dashboard. Role:', userRole, 'currentUser:', JSON.stringify(currentUser));
+            
+            // Utiliser routeToDashboard qui gère mieux la vérification du rôle
+            if (userRole) {
+                routeToDashboard(userRole);
+            } else {
+                // Fallback: essayer de router quand même
+                console.warn('⚠️ [LOGIN BTN] Rôle non trouvé, tentative routing avec currentUser.role');
+                routeToDashboard(currentUser?.role || 'guest');
             }
         } else {
             // Si non connecté, afficher la modale de connexion
-            loginModal.classList.add('show');
-            setTimeout(() => document.getElementById('loginUsername').focus(), 300);
+            console.log('🔓 [LOGIN BTN CLICK] Utilisateur non connecté, affichage modale');
+            if (loginModal) {
+                loginModal.classList.add('show');
+                setTimeout(() => {
+                    const usernameInput = document.getElementById('loginUsername');
+                    if (usernameInput) usernameInput.focus();
+                }, 300);
+            } else {
+                console.error('❌ [LOGIN BTN CLICK] loginModal non trouvé');
+            }
         }
     });
 
@@ -1641,8 +2039,27 @@ function setupLoginSystem() {
             return;
         }
     
-        // currentUser est mis à jour automatiquement par listenFirebaseAuth
-        const user = window.currentUser;
+        // Attendre que currentUser soit mis à jour par listenFirebaseAuth
+        // On attend un peu pour que hydrateUserFromFirestore se termine
+        let attempts = 0;
+        let user = window.currentUser;
+        while ((!user || !user.role || user.role === 'guest') && attempts < 20) {
+            await new Promise(resolve => setTimeout(resolve, 100));
+            user = window.currentUser;
+            attempts++;
+        }
+    
+        // Si toujours pas de rôle, utiliser hydrateUserFromFirestore directement
+        if (!user || !user.role || user.role === 'guest') {
+            console.log('⚠️ [LOGIN] currentUser pas encore hydraté, appel direct hydrateUserFromFirestore');
+            user = await hydrateUserFromFirestore(fbUser);
+            const mappedRole = EMAIL_ROLE_MAP[fbUser.email];
+            if (mappedRole && user.role !== mappedRole) {
+                user.role = mappedRole;
+            }
+            window.currentUser = user;
+            localStorage.setItem('ae2i_current_user', JSON.stringify(window.currentUser));
+        }
     
         console.log('✅ Utilisateur connecté via Firebase:', user);
     
@@ -1654,20 +2071,26 @@ function setupLoginSystem() {
         loginForm.reset();
     
         const welcomeMsg = siteData.language === 'en' ? 
-            `Welcome, ${user.username}!` :
-            `Bienvenue, ${user.username}!`;
+            `Welcome, ${user.username || user.email}!` :
+            `Bienvenue, ${user.username || user.email}!`;
     
         showNotification(welcomeMsg, 'success');
-        logActivity(user.username, `Connexion réussie (rôle: ${user.role})`);
-    
-        // Rediriger vers le dashboard approprié
-        if (user.role === 'admin') {
-            showPage('admin');
-        } else if (user.role === 'recruiter' || user.role === 'recruteur') {
-            showPage('recruteur');
-        } else if (user.role === 'reader' || user.role === 'lecteur') {
-            showPage('lecteur');
-        }
+        
+        // Clear logout flag when user successfully logs in
+        localStorage.removeItem('ae2i_logged_out');
+        justLoggedOut = false;
+        
+        // Navigation directe vers le dashboard en fonction du rôle réellement résolu
+        const role = (user?.role || 'lecteur').toLowerCase();
+        logActivity(user.username || user.email, `Connexion réussie (rôle: ${role}) [modal submit]`);
+        
+        // Marquer que ce n'est plus le chargement initial pour permettre le routing
+        isInitialAuthCheck = false;
+        
+        // Router vers le dashboard approprié
+        console.log('🚀 [LOGIN SUBMIT] Routing to dashboard for role:', role);
+        routeToDashboard(role);
+        console.log('[LOGIN SUBMIT] After routing, currentUser=', JSON.stringify(window.currentUser));
     });
     
 
@@ -1786,33 +2209,70 @@ function updateLoginStatus() {
     const adminMenu = document.getElementById('adminMenu'); // menu admin
     const recruiterMenu = document.getElementById('recruiterMenu'); // menu recruteur
 
+    // Certains éléments n'existent pas sur toutes les pages/versions : sécuriser
+    const safeSetText = (el, value) => {
+        if (el) el.textContent = value;
+    };
+    const safeShow = (el, shouldShow) => {
+        if (el) el.style.display = shouldShow ? 'block' : 'none';
+    };
+
     if (user.isLoggedIn) {
         // Affiche le nom et bouton logout
-        userDisplay.textContent = user.username;
-        loginBtn.textContent = "Logout";
-        loginBtn.onclick = logoutFirebase;
+        safeSetText(userDisplay, user.username);
+        if (loginBtn) {
+            loginBtn.textContent = "Logout";
+            loginBtn.onclick = logoutFirebase;
+        }
 
         // Affiche menus selon le rôle
-        adminMenu.style.display = user.role === 'admin' ? 'block' : 'none';
-        recruiterMenu.style.display = (user.role === 'recruiter' || user.role === 'recruteur') ? 'block' : 'none';
+        safeShow(adminMenu, user.role === 'admin');
+        safeShow(recruiterMenu, (user.role === 'recruiter' || user.role === 'recruteur'));
     } else {
         // Guest view
-        userDisplay.textContent = "Guest";
-        loginBtn.textContent = "Login";
-        loginBtn.onclick = () => loginModal.classList.add('show');
+        safeSetText(userDisplay, "Guest");
+        if (loginBtn) {
+            loginBtn.textContent = "Login";
+            loginBtn.onclick = () => loginModal.classList.add('show');
+        }
 
-        adminMenu.style.display = 'none';
-        recruiterMenu.style.display = 'none';
+        safeShow(adminMenu, false);
+        safeShow(recruiterMenu, false);
     }
 }
 
-function logout() {
+async function logout() {
     console.log('🔴 [LOGOUT] Fonction logout() appelée');
-    logActivity(currentUser.username, 'Déconnexion');
+    if (currentUser && currentUser.username && currentUser.username !== 'guest') {
+        logActivity(currentUser.username, 'Déconnexion');
+    }
+
+    // Sign out from Firebase first
+    try {
+        const signOutFn = window.firebaseServices?.signOut;
+        if (typeof signOutFn === 'function') {
+            await signOutFn();
+        } else if (window.firebaseServices?.auth?.signOut) {
+            await window.firebaseServices.auth.signOut();
+        } else if (window.firebaseHelper?.logout) {
+            await window.firebaseHelper.logout();
+        }
+        console.log('✅ [LOGOUT] Firebase sign out completed');
+    } catch (error) {
+        console.error('❌ [LOGOUT] Firebase sign out error:', error);
+        // Continue with logout even if Firebase fails
+    }
+
+    // Set persistent logout flag
+    localStorage.setItem('ae2i_logged_out', 'true');
+    justLoggedOut = true;
 
     currentUser = { username: 'guest', role: 'guest', isLoggedIn: false };
     localStorage.removeItem('ae2i_current_user');
     sessionStorage.clear();
+
+    // Reset initial auth check flag
+    isInitialAuthCheck = true;
 
     updateLoginButton();
     updateLoginStatus();
@@ -1824,12 +2284,32 @@ function logout() {
 }
 
 // Fonction globale pour déconnexion depuis les dashboards
-function logoutUser() {
-    console.log('🔴 [LOGOUT] Déconnexion en cours...');
+async function logoutUser() {
+    console.log('🔴 [LOGOUT USER] Déconnexion en cours...');
 
-    if (currentUser && currentUser.username) {
+    if (currentUser && currentUser.username && currentUser.username !== 'guest') {
         logActivity(currentUser.username, 'Déconnexion');
     }
+
+    // Sign out from Firebase first
+    try {
+        const signOutFn = window.firebaseServices?.signOut;
+        if (typeof signOutFn === 'function') {
+            await signOutFn();
+        } else if (window.firebaseServices?.auth?.signOut) {
+            await window.firebaseServices.auth.signOut();
+        } else if (window.firebaseHelper?.logout) {
+            await window.firebaseHelper.logout();
+        }
+        console.log('✅ [LOGOUT USER] Firebase sign out completed');
+    } catch (error) {
+        console.error('❌ [LOGOUT USER] Firebase sign out error:', error);
+        // Continue with logout even if Firebase fails
+    }
+
+    // Set persistent logout flag
+    localStorage.setItem('ae2i_logged_out', 'true');
+    justLoggedOut = true;
 
     // Réinitialiser l'utilisateur courant
     currentUser = { username: 'guest', role: 'guest', isLoggedIn: false };
@@ -1854,6 +2334,9 @@ function logoutUser() {
         mobileMenuOverlay.classList.remove('show');
     }
 
+    // Reset initial auth check flag
+    isInitialAuthCheck = true;
+
     // Mettre à jour le bouton immédiatement
     updateLoginButton();
     updateLoginStatus();
@@ -1865,35 +2348,15 @@ function logoutUser() {
     // Notification de succès
     showNotification(siteData.language === 'en' ? 'Successfully logged out' : 'Déconnexion réussie', 'success');
 
-    console.log('✅ [LOGOUT] Déconnexion réussie - currentUser:', JSON.stringify(currentUser));
+    console.log('✅ [LOGOUT USER] Déconnexion réussie - currentUser:', JSON.stringify(currentUser));
 }
-function showPage(page) {
-    const user = window.currentUser || { username: "guest", role: "guest", isLoggedIn: false };
-
-    // Liste des pages protégées
-    const adminPages = ['admin'];
-    const recruiterPages = ['recruteur'];
-
-    if (adminPages.includes(page) && user.role !== 'admin') {
-        showNotification("Accès admin requis", "error");
-        return;
-    }
-
-    if (recruiterPages.includes(page) && user.role !== 'recruiter' && user.role !== 'recruteur') {
-        showNotification("Accès recruteur requis", "error");
-        return;
-    }
-
-    // Masquer toutes les pages
-    document.querySelectorAll('.page').forEach(p => p.style.display = 'none');
-
-    // Afficher la page demandée
-    const target = document.getElementById(page);
-    if (target) target.style.display = 'block';
-}
+// REMOVED: Duplicate showPage function - using the main one at line 1410 instead
+// This duplicate was overriding the correct showPage function and causing routing issues
 
 // Expose functions to window for onclick handlers and global access
 window.logoutUser = logoutUser;
+window.logoutFirebase = logoutFirebase;
+window.logout = logout;
 window.updateLoginButton = updateLoginButton;
 
 // Setup consent system
@@ -2073,6 +2536,10 @@ function addArabicTranslations() {
 // Scroll to top
 function setupScrollToTop() {
     const scrollToTopBtn = document.getElementById('scrollToTop');
+    if (!scrollToTopBtn) {
+        console.warn('scrollToTop button missing, skipping setup.');
+        return;
+    }
     
     window.addEventListener('scroll', function() {
         if (window.pageYOffset > 300) {
@@ -2209,33 +2676,6 @@ function safeSerialize(data) {
 }
 
 function forceSaveData() {
-    
-        console.log("🟦 DEBUG: loadSiteData() appelée");
-    
-        console.log("🟦 DEBUG: Avant restauration, currentUser =", currentUser);
-    
-        // Vérifier si une session existe dans localStorage
-        const savedUser = localStorage.getItem("ae2i_current_user");
-        console.log("🟦 DEBUG: savedUser brut =", savedUser);
-    
-        if (savedUser) {
-            try {
-                const parsed = JSON.parse(savedUser);
-                console.log("🟦 DEBUG: parsed savedUser =", parsed);
-    
-                if (parsed.isLoggedIn) {
-                    console.log("🟩 DEBUG: RESTAURATION: session trouvée → currentUser devient :", parsed);
-                    currentUser = parsed;
-                } else {
-                    console.log("🟨 DEBUG: Session trouvée mais user NON connecté → on ignore");
-                }
-            } catch (e) {
-                console.log("🟥 DEBUG: Erreur parsing savedUser", e);
-            }
-        } else {
-            console.log("🟥 DEBUG: Aucun savedUser trouvé dans localStorage");
-        }
-    
     console.log('[QA] Saving siteData...');
     if (saveInProgress) {
         console.log('⏳ Sauvegarde déjà en cours, attente...');
@@ -2246,30 +2686,41 @@ function forceSaveData() {
 
     try {
         /* ---------------------------
-           🔐 FIX : Protéger currentUser
+           🔐 FIX : Protéger currentUser (mais respecter logout)
         ---------------------------- */
-        try {
-            const savedSession = localStorage.getItem('ae2i_current_user');
+        // Ne pas restaurer la session si logout récent
+        if (!justLoggedOut) {
+            try {
+                const savedSession = localStorage.getItem('ae2i_current_user');
 
-            if (savedSession) {
-                const parsed = JSON.parse(savedSession);
+                if (savedSession) {
+                    const parsed = JSON.parse(savedSession);
 
-                // Si la session sauvée est connectée mais currentUser == guest → NE PAS ÉCRASER
-                if (parsed.isLoggedIn && (!currentUser || !currentUser.isLoggedIn)) {
-                    console.log("💾 [PATCH] Empêche écrasement — restauration utilisateur connecté.");
-                    currentUser = parsed;
+                    // Si la session sauvée est connectée mais currentUser == guest → NE PAS ÉCRASER (sauf après logout)
+                    if (parsed.isLoggedIn && (!currentUser || !currentUser.isLoggedIn) && !justLoggedOut) {
+                        console.log("💾 [PATCH] Empêche écrasement — restauration utilisateur connecté.");
+                        currentUser = parsed;
+                    }
                 }
+            } catch (e) {
+                console.warn("⚠️ Erreur analyse session:", e);
             }
-        } catch (e) {
-            console.warn("⚠️ Erreur analyse session:", e);
+        } else {
+            console.log("⏸️ [SAVE] Logout récent détecté, skip restauration session");
         }
 
-        // Sauvegarde sécurisée de currentUser
-        if (currentUser && currentUser.isLoggedIn) {
+        // Sauvegarde sécurisée de currentUser (seulement si connecté ET pas de logout récent)
+        if (currentUser && currentUser.isLoggedIn && !justLoggedOut) {
             localStorage.setItem("ae2i_current_user", JSON.stringify(currentUser));
             console.log("💾 [SAVE] Session préservée:", currentUser.username, currentUser.role);
         } else {
-            console.log("💾 [SAVE] Aucun user connecté → pas de remplacement.");
+            // Si logout récent, s'assurer que la session est bien supprimée
+            if (justLoggedOut) {
+                localStorage.removeItem("ae2i_current_user");
+                console.log("💾 [SAVE] Logout récent → session supprimée de localStorage");
+            } else {
+                console.log("💾 [SAVE] Aucun user connecté → pas de remplacement.");
+            }
         }
 
         /* ---------------------------
@@ -2316,14 +2767,21 @@ function forceSaveData() {
         localStorage.setItem('ae2i_last_save', new Date().toISOString());
 
         /* ---------------------------
-           🔐 Re-sauvegarde currentUser
+           🔐 Re-sauvegarde currentUser (sauf après logout)
         ---------------------------- */
-        if (currentUser && currentUser.isLoggedIn) {
+        if (currentUser && currentUser.isLoggedIn && !justLoggedOut) {
             localStorage.setItem('ae2i_current_user', JSON.stringify(currentUser));
+        } else if (justLoggedOut) {
+            // S'assurer que la session est supprimée après logout
+            localStorage.removeItem('ae2i_current_user');
         }
 
         console.log('✅ Données sauvegardées avec succès (vérifiées)');
-        console.log('✅ Session préservée après sauvegarde:', currentUser.username, currentUser.role);
+        if (currentUser && currentUser.isLoggedIn && !justLoggedOut) {
+            console.log('✅ Session préservée après sauvegarde:', currentUser.username, currentUser.role);
+        } else {
+            console.log('✅ Aucune session active après sauvegarde');
+        }
 
         saveInProgress = false;
         return true;
@@ -2358,12 +2816,26 @@ function saveSiteData() {
 function loadSiteData() {
     /* 🔥 FIX : restaurer la session depuis localStorage */
 try {
+// Vérifier le flag de logout persistant AVANT de restaurer la session
+const loggedOutFlag = localStorage.getItem('ae2i_logged_out');
+if (loggedOutFlag === 'true') {
+    console.log("⏸️ [LOAD DATA] Flag de logout détecté, skip restauration session");
+    currentUser = { username: "guest", role: "guest", isLoggedIn: false };
+    return; // Ne pas restaurer la session si logout flag est présent
+}
+
+// Ne pas restaurer la session si l'utilisateur vient de se déconnecter
+if (justLoggedOut) {
+    console.log("⏸️ [RESTORE] Logout récent détecté, skip restauration session");
+    return;
+}
+
 const savedUser = localStorage.getItem('ae2i_current_user');
 
 if (savedUser) {
 const parsed = JSON.parse(savedUser);
 
-if (parsed && parsed.isLoggedIn) {
+if (parsed && parsed.isLoggedIn && !justLoggedOut) {
     console.log("🔐 [RESTORE] Session restaurée depuis localStorage:", parsed);
     currentUser = parsed; // <<< FIX PRINCIPAL
 } else {
@@ -2413,19 +2885,24 @@ console.error("❌ [RESTORE] Erreur restauration session:", e);
                     }
                 }
 
-                // Restaurer la session utilisateur si elle existe
-                const savedSession = localStorage.getItem('ae2i_current_user');
-                if (savedSession) {
-                    try {
-                        const sessionData = JSON.parse(savedSession);
-                        if (sessionData && sessionData.isLoggedIn) {
-                            currentUser = sessionData;
-                            console.log('✅ Session restaurée:', currentUser.username, 'Role:', currentUser.role);
+                // Restaurer la session utilisateur si elle existe (sauf après logout)
+                const loggedOutFlag = localStorage.getItem('ae2i_logged_out');
+                if (loggedOutFlag !== 'true' && !justLoggedOut) {
+                    const savedSession = localStorage.getItem('ae2i_current_user');
+                    if (savedSession) {
+                        try {
+                            const sessionData = JSON.parse(savedSession);
+                            if (sessionData && sessionData.isLoggedIn) {
+                                currentUser = sessionData;
+                                console.log('✅ Session restaurée:', currentUser.username, 'Role:', currentUser.role);
+                            }
+                        } catch (e) {
+                            console.error('❌ Erreur restauration session:', e);
+                            localStorage.removeItem('ae2i_current_user');
                         }
-                    } catch (e) {
-                        console.error('❌ Erreur restauration session:', e);
-                        localStorage.removeItem('ae2i_current_user');
                     }
+                } else {
+                    console.log('⏸️ [RESTORE] Logout détecté (flag ou récent), skip restauration session dans loadSiteData');
                 }
 
                 console.log('✅ Données chargées avec succès');
@@ -3003,6 +3480,7 @@ function setupGlobalEventDelegation() {
     // Délégation pour les effets hover sur les éléments dynamiques
     document.addEventListener('mouseenter', function(e) {
         const target = e.target;
+        if (!target || typeof target.closest !== 'function') return;
 
         // Gestion des cartes et éléments avec effet hover
         if (target.closest('.service-item, .client-item, .testimonial-item, .job-item, .user-item, .log-item, .page-item, .cv-item, .message-item')) {
@@ -3015,6 +3493,7 @@ function setupGlobalEventDelegation() {
 
     document.addEventListener('mouseleave', function(e) {
         const target = e.target;
+        if (!target || typeof target.closest !== 'function') return;
 
         // Restauration du style par défaut
         if (target.closest('.service-item, .client-item, .testimonial-item, .job-item, .user-item, .log-item, .page-item, .cv-item, .message-item')) {
@@ -4085,6 +4564,16 @@ function setupContactInteractions() {
 
 function executeAdminScript() {
     console.log('⚙️ Executing admin dashboard script');
+    
+    // Ensure logout button is visible
+    const logoutBtn = document.querySelector('#admin-page .btn-logout');
+    if (logoutBtn) {
+        logoutBtn.style.display = 'flex';
+        console.log('✅ [ADMIN SCRIPT] Logout button shown');
+    } else {
+        console.warn('⚠️ [ADMIN SCRIPT] Logout button not found');
+    }
+    
     setupAdminTabs();
     renderAdminContent();
     setupAdminForms();
@@ -6975,37 +7464,93 @@ function deletePage(index) {
 
 function previewCV(cvId) {
     const cv = siteData.cvDatabase.find(c => c.id === cvId);
-    if (cv) {
-        document.getElementById('cvPreviewContent').innerHTML = `
-            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-bottom: 24px;">
-                <div>
-                    <h3 style="color: var(--primary); font-weight: 800; margin-bottom: 20px; font-size: var(--font-size-2xl);">${cv.applicantName}</h3>
-                    <p><strong>Email:</strong> ${cv.applicantEmail}</p>
-                    <p><strong>Téléphone:</strong> ${cv.applicantPhone || 'Non renseigné'}</p>
-                    ${cv.applicantPosition ? `<p><strong>Poste actuel:</strong> ${cv.applicantPosition}</p>` : ''}
-                    ${cv.expectedSalary ? `<p><strong>Salaire souhaité:</strong> ${cv.expectedSalary} DA</p>` : ''}
-                </div>
-                <div>
-                    <p><strong>Poste:</strong> <span style="color: var(--primary); font-weight: 600;">${cv.jobTitle}</span></p>
-                    <p><strong>Date:</strong> ${new Date(cv.appliedAt).toLocaleDateString()}</p>
-                    <p><strong>Statut:</strong> <span class="status-badge ${cv.processed ? 'status-processed' : 'status-pending'}">${cv.processed ? 'Traité' : 'En attente'}</span></p>
-                    ${cv.processedBy ? `<p><strong>Traité par:</strong> ${cv.processedBy}</p>` : ''}
-                    ${cv.currentlyEmployed ? `<p><strong>En poste:</strong> ${cv.currentlyEmployed === 'yes' ? 'Oui' : 'Non'}</p>` : ''}
-                    ${cv.lastJobDate ? `<p><strong>Dernier poste:</strong> ${cv.lastJobDate}</p>` : ''}
-                    ${cv.lastContractType ? `<p><strong>Type contrat:</strong> ${cv.lastContractType}</p>` : ''}
+    if (!cv) {
+        showNotification('CV non trouvé', 'error');
+        return;
+    }
+    
+    // Priorité: URL R2 > cvUrl > applicantCV content
+    const cvUrl = cv.cvR2Url || cv.cvUrl || null;
+    const cvFileName = cv.cvFileName || cv.applicantCV?.name || 'CV.pdf';
+    const cvFileSize = cv.cvFileSize || cv.applicantCV?.size || 0;
+    
+    let cvPreviewSection = '';
+    if (cvUrl) {
+        // Afficher le CV depuis R2 dans un iframe
+        cvPreviewSection = `
+            <div style="margin-top: 24px;">
+                <h4 style="color: var(--primary); font-weight: 700; margin-bottom: 16px;">
+                    <i class="fas fa-file-pdf"></i> CV: ${cvFileName}
+                    ${cvFileSize ? `<span style="font-size: var(--font-size-sm); color: var(--text-light); font-weight: normal;">(${(cvFileSize / 1024).toFixed(1)} KB)</span>` : ''}
+                </h4>
+                <div style="background: var(--bg-alt); padding: 16px; border-radius: var(--border-radius-lg); margin-top: 12px; border: 2px solid var(--border);">
+                    <div style="display: flex; gap: 12px; margin-bottom: 12px; flex-wrap: wrap;">
+                        <button class="btn btn-sm btn-primary functional-btn" onclick="openCVViewer('${cvUrl}', '${cv.applicantName}')">
+                            <i class="fas fa-expand"></i> Ouvrir en plein écran
+                        </button>
+                        <button class="btn btn-sm btn-success functional-btn" onclick="downloadCV(${cv.id})">
+                            <i class="fas fa-download"></i> Télécharger
+                        </button>
+                        <button class="btn btn-sm btn-accent functional-btn" onclick="window.open('${cvUrl}', '_blank').print()">
+                            <i class="fas fa-print"></i> Imprimer
+                        </button>
+                    </div>
+                    <iframe src="${cvUrl}" style="width: 100%; height: 600px; border: 1px solid var(--border); border-radius: var(--border-radius);"></iframe>
                 </div>
             </div>
+        `;
+    } else if (cv.applicantCV && cv.applicantCV.content) {
+        // Fallback: afficher depuis base64
+        cvPreviewSection = `
+            <div style="margin-top: 24px;">
+                <h4 style="color: var(--primary); font-weight: 700; margin-bottom: 16px;">
+                    <i class="fas fa-file-pdf"></i> CV: ${cvFileName}
+                    ${cvFileSize ? `<span style="font-size: var(--font-size-sm); color: var(--text-light); font-weight: normal;">(${(cvFileSize / 1024).toFixed(1)} KB)</span>` : ''}
+                </h4>
+                <div style="background: var(--bg-alt); padding: 16px; border-radius: var(--border-radius-lg); margin-top: 12px; border: 2px solid var(--border);">
+                    <div style="display: flex; gap: 12px; margin-bottom: 12px; flex-wrap: wrap;">
+                        <button class="btn btn-sm btn-success functional-btn" onclick="downloadCV(${cv.id})">
+                            <i class="fas fa-download"></i> Télécharger
+                        </button>
+                    </div>
+                    <iframe src="${cv.applicantCV.content}" style="width: 100%; height: 600px; border: 1px solid var(--border); border-radius: var(--border-radius);"></iframe>
+                </div>
+            </div>
+        `;
+    } else {
+        cvPreviewSection = `
             <div style="margin-top: 24px;">
                 <h4 style="color: var(--primary); font-weight: 700; margin-bottom: 16px;">CV:</h4>
                 <div style="background: var(--bg-alt); padding: 24px; border-radius: var(--border-radius-lg); margin-top: 12px; text-align: center; border: 3px dashed var(--border);">
                     <i class="fas fa-file-pdf" style="font-size: 60px; color: var(--danger); margin-bottom: 12px;"></i>
-                    <p style="font-weight: 600; margin-bottom: 8px;">${cv.applicantCV ? cv.applicantCV.name : 'CV non disponible'}</p>
-                    ${cv.applicantCV ? `<p style="font-size: var(--font-size-sm); color: var(--text-light);">Taille: ${(cv.applicantCV.size / 1024).toFixed(1)} KB</p>` : ''}
+                    <p style="font-weight: 600; margin-bottom: 8px;">CV non disponible</p>
                 </div>
             </div>
         `;
-        openModal('cvPreviewModal');
     }
+    
+    document.getElementById('cvPreviewContent').innerHTML = `
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-bottom: 24px;">
+            <div>
+                <h3 style="color: var(--primary); font-weight: 800; margin-bottom: 20px; font-size: var(--font-size-2xl);">${cv.applicantName || (cv.applicantFirstName + ' ' + cv.applicantLastName) || 'Candidat'}</h3>
+                <p><strong>Email:</strong> ${cv.applicantEmail || cv.email || 'Non renseigné'}</p>
+                <p><strong>Téléphone:</strong> ${cv.applicantPhone || cv.phone || 'Non renseigné'}</p>
+                ${cv.applicantPosition ? `<p><strong>Poste actuel:</strong> ${cv.applicantPosition}</p>` : ''}
+                ${cv.expectedSalary ? `<p><strong>Salaire souhaité:</strong> ${cv.expectedSalary} DA</p>` : ''}
+            </div>
+            <div>
+                <p><strong>Poste:</strong> <span style="color: var(--primary); font-weight: 600;">${cv.jobTitle}</span></p>
+                <p><strong>Date:</strong> ${new Date(cv.appliedAt || cv.submittedAt).toLocaleDateString()}</p>
+                <p><strong>Statut:</strong> <span class="status-badge ${cv.processed ? 'status-processed' : 'status-pending'}">${cv.processed ? 'Traité' : 'En attente'}</span></p>
+                ${cv.processedBy ? `<p><strong>Traité par:</strong> ${cv.processedBy}</p>` : ''}
+                ${cv.currentlyEmployed ? `<p><strong>En poste:</strong> ${cv.currentlyEmployed === 'yes' ? 'Oui' : 'Non'}</p>` : ''}
+                ${cv.lastJobDate ? `<p><strong>Dernier poste:</strong> ${cv.lastJobDate}</p>` : ''}
+                ${cv.lastContractType ? `<p><strong>Type contrat:</strong> ${cv.lastContractType}</p>` : ''}
+            </div>
+        </div>
+        ${cvPreviewSection}
+    `;
+    openModal('cvPreviewModal');
 }
 
 function contactApplicant(email) {
@@ -7014,7 +7559,14 @@ function contactApplicant(email) {
 }
 
 function markAsProcessed(cvId) {
-    const cv = siteData.cvDatabase.find(c => c.id === cvId);
+    // Try to find by id (number or string match)
+    let cv = siteData.cvDatabase.find(c => c.id === cvId || c.id == cvId || String(c.id) === String(cvId));
+    
+    // If not found, try to find by applicantEmail as fallback
+    if (!cv && typeof cvId === 'string') {
+        cv = siteData.cvDatabase.find(c => c.applicantEmail === cvId);
+    }
+    
     if (cv) {
         cv.processed = true;
         cv.processedAt = new Date().toISOString();
@@ -7029,25 +7581,100 @@ function markAsProcessed(cvId) {
 }
 
 function downloadCV(cvId) {
-    const cv = siteData.cvDatabase.find(c => c.id === cvId);
-    if (cv && cv.applicantCV) {
-        showNotification(`Téléchargement du CV de ${cv.applicantName}`, 'info');
+    // Try to find by id (number or string match)
+    let cv = siteData.cvDatabase.find(c => c.id === cvId || c.id == cvId || String(c.id) === String(cvId));
+    
+    // If not found, try to find by applicantEmail as fallback
+    if (!cv && typeof cvId === 'string') {
+        cv = siteData.cvDatabase.find(c => c.applicantEmail === cvId);
+    }
+    
+    if (!cv) {
+        showNotification('CV non trouvé', 'error');
+        return;
+    }
+    
+    // Priorité: URL R2 > cvUrl > applicantCV content
+    const cvUrl = cv.cvR2Url || cv.cvUrl || null;
+    
+    if (cvUrl) {
+        // Télécharger depuis R2 ou URL directe
+        const link = document.createElement('a');
+        link.href = cvUrl;
+        link.download = cv.cvFileName || cv.applicantCV?.name || `${cv.applicantName}_CV.pdf`;
+        link.target = '_blank';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        showNotification(`Téléchargement du CV de ${cv.applicantName}`, 'success');
         logActivity(currentUser.username, `CV téléchargé: ${cv.applicantName}`);
+    } else if (cv.applicantCV && cv.applicantCV.content) {
+        // Fallback: télécharger depuis base64
+        const link = document.createElement('a');
+        link.href = cv.applicantCV.content;
+        link.download = cv.applicantCV.name || `${cv.applicantName}_CV.pdf`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        showNotification(`Téléchargement du CV de ${cv.applicantName}`, 'success');
+        logActivity(currentUser.username, `CV téléchargé: ${cv.applicantName}`);
+    } else {
+        showNotification('CV non disponible', 'warning');
     }
 }
 
-function deleteApplication(cvId) {
-    if (confirm('Supprimer cette candidature? Cette action est irréversible.')) {
-        const cvIndex = siteData.cvDatabase.findIndex(c => c.id === cvId);
-        if (cvIndex >= 0) {
-            const cv = siteData.cvDatabase[cvIndex];
-            siteData.cvDatabase.splice(cvIndex, 1);
-            if (saveSiteData()) {
-                renderAdminCvDatabase();
-                populateCVJobFilter();
-                showNotification('Candidature supprimée', 'success');
-                logActivity(currentUser.username, `Candidature supprimée: ${cv.applicantName}`);
+async function deleteApplication(cvId) {
+    if (!confirm('Supprimer cette candidature? Cette action est irréversible.')) {
+        return;
+    }
+    
+    // Try to find by id (number or string match)
+    let cv = siteData.cvDatabase.find(c => c.id === cvId || c.id == cvId || String(c.id) === String(cvId));
+    
+    // If not found, try to find by applicantEmail as fallback
+    if (!cv && typeof cvId === 'string') {
+        cv = siteData.cvDatabase.find(c => c.applicantEmail === cvId);
+    }
+    
+    if (!cv) {
+        showNotification('Candidature non trouvée', 'error');
+        return;
+    }
+    
+    const cvName = cv.applicantName || 'Candidat';
+    const firebaseId = cv.firebaseId || cv.id;
+    
+    // Delete from Firebase if in Firebase mode
+    if (APP_MODE === 'FIREBASE' && window.firebaseHelper && firebaseId) {
+        try {
+            console.log('🗑️ [DELETE] Deleting from Firebase, ID:', firebaseId);
+            const result = await window.firebaseHelper.deleteDocument('cvDatabase', firebaseId);
+            if (result.success) {
+                console.log('✅ [DELETE] Deleted from Firebase');
+            } else {
+                console.error('❌ [DELETE] Firebase delete failed:', result.error);
+                // Continue with local delete even if Firebase fails
             }
+        } catch (error) {
+            console.error('❌ [DELETE] Firebase delete error:', error);
+            // Continue with local delete even if Firebase fails
+        }
+    }
+    
+    // Delete from local database
+    const cvIndex = siteData.cvDatabase.findIndex(c => 
+        c.id === cvId || c.id == cvId || String(c.id) === String(cvId) || c.firebaseId === firebaseId
+    );
+    
+    if (cvIndex >= 0) {
+        siteData.cvDatabase.splice(cvIndex, 1);
+        if (saveSiteData()) {
+            renderAdminCvDatabase();
+            if (typeof renderRecruteurApplications === 'function') renderRecruteurApplications();
+            if (typeof renderLecteurCvDatabase === 'function') renderLecteurCvDatabase();
+            if (typeof populateCVJobFilter === 'function') populateCVJobFilter();
+            showNotification('Candidature supprimée', 'success');
+            logActivity(currentUser.username, `Candidature supprimée: ${cvName}`);
         }
     }
 }
@@ -7424,21 +8051,104 @@ function anonymizeOldData() {
 
 function executeRecruteurScript() {
     console.log('👥 Executing recruteur dashboard script');
-    renderRecruteurContent();
-    setupRecruteurInteractions();
+    
+    // Load candidatures from Firebase if in Firebase mode
+    if (APP_MODE === 'FIREBASE' && window.firebaseHelper) {
+        loadCandidaturesFromFirebase().then(() => {
+            renderRecruteurContent();
+            setupRecruteurInteractions();
+        }).catch(err => {
+            console.error('Error loading candidatures:', err);
+            renderRecruteurContent();
+            setupRecruteurInteractions();
+        });
+    } else {
+        renderRecruteurContent();
+        setupRecruteurInteractions();
+    }
+}
+
+// Load candidatures from Firebase
+async function loadCandidaturesFromFirebase() {
+    if (!window.firebaseHelper) return;
+    
+    try {
+        console.log('📡 Loading candidatures from Firebase...');
+        const result = await window.firebaseHelper.getCollection('cvDatabase');
+        
+        if (result.success && result.data) {
+            const normalized = result.data.map(doc => {
+                const d = { id: doc.id, ...doc };
+                
+                // Normalize timestamps
+                if (d.submittedAt && d.submittedAt.toDate) {
+                    try { d.appliedAt = d.submittedAt.toDate().toISOString(); } catch(e){}
+                } else if (d.submittedAt) {
+                    d.appliedAt = (new Date(d.submittedAt)).toISOString();
+                } else if (!d.appliedAt) {
+                    d.appliedAt = new Date().toISOString();
+                }
+                
+                // Normalize field names
+                if (!d.applicantName) {
+                    d.applicantName = d.fullName || d.cvData?.fullName || d.applicantFullName || 
+                        ((d.applicantFirstName || '') + ' ' + (d.applicantLastName || '')).trim() || 'Candidat';
+                }
+                if (!d.jobTitle) {
+                    d.jobTitle = d.position || d.job || d.cvData?.position || d.jobTitle || 'Poste';
+                }
+                
+                // Ensure all required fields exist
+                if (!d.applicantEmail && d.email) {
+                    d.applicantEmail = d.email;
+                }
+                if (!d.applicantPhone && d.phone) {
+                    d.applicantPhone = d.phone;
+                }
+                if (!d.applicantFirstName && d.firstName) {
+                    d.applicantFirstName = d.firstName;
+                }
+                if (!d.applicantLastName && d.lastName) {
+                    d.applicantLastName = d.lastName;
+                }
+                if (!d.jobId && d.job_id) {
+                    d.jobId = d.job_id;
+                }
+                
+                // Map CV URLs
+                if (!d.cvR2Url && d.cvUrl) {
+                    d.cvR2Url = d.cvUrl;
+                }
+                if (!d.cvUrl && d.cvR2Url) {
+                    d.cvUrl = d.cvR2Url;
+                }
+                
+                d.processed = !!d.processed;
+                return d;
+            });
+            
+            siteData.cvDatabase = normalized;
+            console.log('✅ Loaded', normalized.length, 'candidatures from Firebase');
+            console.log('📋 Candidatures:', normalized.map(c => ({ id: c.id, name: c.applicantName, jobId: c.jobId, jobTitle: c.jobTitle })));
+        }
+    } catch (error) {
+        console.error('❌ Error loading candidatures from Firebase:', error);
+    }
 }
 
 function renderRecruteurContent() {
-    // Update recruiter stats
+    // Update recruiter stats - Show ALL candidatures (not just recruiter's jobs)
     const myJobs = siteData.jobs.filter(j => j.createdBy === currentUser.username);
-    const myApplications = siteData.cvDatabase.filter(cv => 
-        myJobs.some(job => job.id === cv.jobId)
-    );
+    const allApplications = siteData.cvDatabase || [];
+    
+    console.log('📊 [RECRUTEUR] My jobs:', myJobs.length, myJobs.map(j => ({ id: j.id, title: j.title.fr })));
+    console.log('📊 [RECRUTEUR] All candidatures:', allApplications.length);
+    console.log('📊 [RECRUTEUR] All candidatures details:', allApplications.map(c => ({ id: c.id, name: c.applicantName, jobId: c.jobId, jobTitle: c.jobTitle })));
     
     document.getElementById('recruteurMyJobs').textContent = myJobs.length;
-    document.getElementById('recruteurApplications').textContent = myApplications.length;
-    document.getElementById('recruteurProcessed').textContent = myApplications.filter(cv => cv.processed).length;
-    document.getElementById('recruteurPending').textContent = myApplications.filter(cv => !cv.processed).length;
+    document.getElementById('recruteurApplications').textContent = allApplications.length;
+    document.getElementById('recruteurProcessed').textContent = allApplications.filter(cv => cv.processed).length;
+    document.getElementById('recruteurPending').textContent = allApplications.filter(cv => !cv.processed).length;
 
     // Render recruiter jobs
     const jobsList = document.getElementById('recruteurJobsList');
@@ -7529,13 +8239,31 @@ function renderRecruteurApplications() {
         // Use new advanced filtering function
         const allFiltered = getRecruteurFilteredCandidates();
         
+        // Update filter count display
+        const filterCountEl = document.getElementById('recruteurFilterCountNumber');
+        if (filterCountEl) {
+            filterCountEl.textContent = allFiltered.length;
+        }
+        
+        // Get items per page from dropdown or default to 10
+        const itemsPerPageSelect = document.getElementById('recruteurItemsPerPage');
+        const itemsPerPageValue = itemsPerPageSelect?.value || '10';
+        const itemsPerPage = itemsPerPageValue === 'all' ? allFiltered.length : parseInt(itemsPerPageValue, 10);
+        
         // Pagination
-        const itemsPerPage = 10;
         const currentPage = window.recruteurCurrentPage || 1;
-        const totalPages = Math.ceil(allFiltered.length / itemsPerPage);
-        const startIdx = (currentPage - 1) * itemsPerPage;
-        const endIdx = startIdx + itemsPerPage;
+        const totalPages = itemsPerPage === allFiltered.length ? 1 : Math.ceil(allFiltered.length / itemsPerPage);
+        const startIdx = itemsPerPage === allFiltered.length ? 0 : (currentPage - 1) * itemsPerPage;
+        const endIdx = itemsPerPage === allFiltered.length ? allFiltered.length : startIdx + itemsPerPage;
         const filteredApplications = allFiltered.slice(startIdx, endIdx);
+        
+        console.log('📄 [PAGINATION]', {
+            total: allFiltered.length,
+            itemsPerPage: itemsPerPage,
+            currentPage: currentPage,
+            totalPages: totalPages,
+            showing: `${startIdx + 1}-${Math.min(endIdx, allFiltered.length)} of ${allFiltered.length}`
+        });
 
         // Boutons d'export au-dessus
         const exportSection = document.createElement('div');
@@ -7575,7 +8303,7 @@ function renderRecruteurApplications() {
             `;
             cvItem.innerHTML = `
                 <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px;">
-                    <h4 style="font-weight: 800; font-size: var(--font-size-lg);">${cv.applicantName}</h4>
+                    <h4 style="font-weight: 800; font-size: var(--font-size-lg);">${cv.applicantName || (cv.applicantFirstName + ' ' + cv.applicantLastName) || 'Candidat'}</h4>
                     <div style="display: flex; gap: 8px; align-items: center;">
                         <select onchange="updateCandidateStatus('${cvId}', this.value)" class="form-control" style="padding: 6px 12px; font-size: var(--font-size-sm);">
                             <option value="nouveau" ${cv.status === 'nouveau' ? 'selected' : ''}>🆕 Nouveau</option>
@@ -7596,11 +8324,11 @@ function renderRecruteurApplications() {
                     </div>
                     <div style="background: var(--bg-alt); padding: 12px; border-radius: var(--border-radius);">
                         <strong>Email:</strong><br>
-                        <span style="color: var(--text-light);">${cv.applicantEmail}</span>
+                        <span style="color: var(--text-light);">${cv.applicantEmail || cv.email || 'Non renseigné'}</span>
                     </div>
                     <div style="background: var(--bg-alt); padding: 12px; border-radius: var(--border-radius);">
                         <strong>Téléphone:</strong><br>
-                        <span style="color: var(--text-light);">${cv.applicantPhone || 'Non renseigné'}</span>
+                        <span style="color: var(--text-light);">${cv.applicantPhone || cv.phone || 'Non renseigné'}</span>
                     </div>
                     <div style="background: var(--bg-alt); padding: 12px; border-radius: var(--border-radius);">
                         <strong>Date:</strong><br>
@@ -7628,19 +8356,19 @@ function renderRecruteurApplications() {
                     <button class="btn btn-sm btn-accent functional-btn" onclick="downloadApplicationPdfSummary(siteData.cvDatabase.find(c => (c.id || c.applicantEmail) === '${cvId}'))" style="background: linear-gradient(135deg, #00a896 0%, #028090 100%); color: white; border: none;">
                         <i class="fas fa-file-pdf"></i> Résumé PDF
                     </button>
-                    <button class="btn btn-sm btn-outline functional-btn" onclick="openCVViewer('${cv.cvUrl || ''}', '${cv.applicantName}')">
+                    <button class="btn btn-sm btn-outline functional-btn" onclick="openCVViewer('${cv.cvR2Url || cv.cvUrl || ''}', '${cv.applicantName || (cv.applicantFirstName + ' ' + cv.applicantLastName) || 'Candidat'}')">
                         <i class="fas fa-expand"></i> Visionneuse CV
                     </button>
-                    <button class="btn btn-sm btn-outline functional-btn" onclick="previewCV(${cv.id})">
+                    <button class="btn btn-sm btn-outline functional-btn" onclick="previewCV('${cvId}')">
                         <i class="fas fa-eye"></i> Voir détails
                     </button>
-                    <button class="btn btn-sm btn-primary functional-btn" onclick="contactApplicant('${cv.applicantEmail}')">
+                    <button class="btn btn-sm btn-primary functional-btn" onclick="contactApplicant('${cv.applicantEmail || cv.email || ''}')">
                         <i class="fas fa-envelope"></i> Contacter
                     </button>
-                    <button class="btn btn-sm btn-success functional-btn" onclick="markAsProcessed(${cv.id})">
+                    <button class="btn btn-sm btn-success functional-btn" onclick="markAsProcessed('${cvId}')">
                         <i class="fas fa-check"></i> Marquer traité
                     </button>
-                    <button class="btn btn-sm btn-warning functional-btn" onclick="downloadCV(${cv.id})">
+                    <button class="btn btn-sm btn-warning functional-btn" onclick="downloadCV('${cvId}')">
                         <i class="fas fa-download"></i> Télécharger CV
                     </button>
                 </div>
@@ -7669,27 +8397,57 @@ function renderRecruteurApplications() {
             }
         });
 
-        // Pagination UI
-        if (totalPages > 1) {
-            const paginationDiv = document.createElement('div');
-            paginationDiv.style.cssText = 'margin-top: var(--spacing-lg); text-align: center;';
-            paginationDiv.innerHTML = `
-                <button class="btn btn-sm btn-outline functional-btn" onclick="changeRecruteurPage(${currentPage - 1})" ${currentPage === 1 ? 'disabled' : ''}>
-                    <i class="fas fa-chevron-left"></i> Précédent
-                </button>
-                <span style="margin: 0 16px; font-weight: 600;">Page ${currentPage} / ${totalPages} (${allFiltered.length} résultats)</span>
-                <button class="btn btn-sm btn-outline functional-btn" onclick="changeRecruteurPage(${currentPage + 1})" ${currentPage === totalPages ? 'disabled' : ''}>
-                    Suivant <i class="fas fa-chevron-right"></i>
-                </button>
-            `;
-            candidatures.appendChild(paginationDiv);
+        // Pagination UI at bottom (use existing element)
+        const paginationBottom = document.getElementById('recruteurPaginationBottom');
+        if (paginationBottom) {
+            if (totalPages > 1 && itemsPerPage !== allFiltered.length) {
+                paginationBottom.innerHTML = `
+                    <button class="btn btn-sm btn-outline functional-btn" onclick="changeRecruteurPage(${currentPage - 1})" ${currentPage === 1 ? 'disabled style="opacity: 0.5; cursor: not-allowed;"' : ''}>
+                        <i class="fas fa-chevron-left"></i> Précédent
+                    </button>
+                    <span style="margin: 0 16px; font-weight: 600; color: var(--text);">
+                        Page ${currentPage} / ${totalPages} 
+                        <span style="color: var(--text-light); font-size: var(--font-size-sm);">
+                            (${startIdx + 1}-${Math.min(endIdx, allFiltered.length)} sur ${allFiltered.length})
+                        </span>
+                    </span>
+                    <button class="btn btn-sm btn-outline functional-btn" onclick="changeRecruteurPage(${currentPage + 1})" ${currentPage === totalPages ? 'disabled style="opacity: 0.5; cursor: not-allowed;"' : ''}>
+                        Suivant <i class="fas fa-chevron-right"></i>
+                    </button>
+                `;
+                paginationBottom.style.display = 'flex';
+            } else {
+                paginationBottom.innerHTML = `
+                    <span style="color: var(--text-light); font-size: var(--font-size-sm);">
+                        ${allFiltered.length} candidature(s) affichée(s)
+                    </span>
+                `;
+                paginationBottom.style.display = 'flex';
+            }
         }
 
-        if (filteredApplications.length === 0) {
-            candidatures.innerHTML = '<p style="text-align: center; color: var(--text-light); padding: 40px; background: var(--bg-alt); border-radius: var(--border-radius-lg);">Aucune candidature trouvée</p>';
+        // Show empty message if no results (but don't overwrite if we already added content)
+        if (filteredApplications.length === 0 && candidatures.children.length === 1) {
+            // Only if we only have the export section, show empty message
+            const emptyMsg = document.createElement('p');
+            emptyMsg.style.cssText = 'text-align: center; color: var(--text-light); padding: 40px; background: var(--bg-alt); border-radius: var(--border-radius-lg); margin-top: var(--spacing-md);';
+            emptyMsg.textContent = 'Aucune candidature trouvée';
+            candidatures.appendChild(emptyMsg);
         }
     }
 }
+
+// Update pagination when items per page changes
+window.updateRecruteurPagination = function() {
+    // Reset to page 1 when changing items per page
+    window.recruteurCurrentPage = 1;
+    renderRecruteurApplications();
+    // Scroll to top of candidatures section
+    const candidaturesEl = document.getElementById('recruteurCandidatures');
+    if (candidaturesEl) {
+        candidaturesEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+};
 // Fonction helper pour debounce
 function debounce(func, wait) {
     let timeout;
@@ -7756,8 +8514,8 @@ function applyRecruteurFilters() {
 }
 
 function getRecruteurFilteredCandidates() {
-    const myJobs = siteData.jobs.filter(j => j.createdBy === currentUser.username);
-    let candidates = siteData.cvDatabase.filter(cv => myJobs.some(job => job.id === cv.jobId));
+    // Show ALL candidatures, not just recruiter's jobs
+    let candidates = siteData.cvDatabase || [];
 
     // Barre de recherche
     const searchTerm = document.getElementById('recruteurSearchBar')?.value.toLowerCase() || '';
@@ -7825,6 +8583,40 @@ function getRecruteurFilteredCandidates() {
         });
     }
 
+    // Filtre Date (NOUVEAU) - Show only recent candidatures
+    const dateFilter = document.getElementById('recruteurDateFilter')?.value || 'all';
+    if (dateFilter !== 'all') {
+        const now = new Date();
+        let cutoffDate = new Date();
+        
+        switch(dateFilter) {
+            case 'today':
+                cutoffDate.setHours(0, 0, 0, 0);
+                break;
+            case '7days':
+                cutoffDate.setDate(now.getDate() - 7);
+                break;
+            case '30days':
+                cutoffDate.setDate(now.getDate() - 30);
+                break;
+            case '90days':
+                cutoffDate.setDate(now.getDate() - 90);
+                break;
+        }
+        
+        candidates = candidates.filter(cv => {
+            const appliedDate = cv.appliedAt ? new Date(cv.appliedAt) : (cv.submittedAt ? new Date(cv.submittedAt) : new Date(cv.createdAt || 0));
+            return appliedDate >= cutoffDate;
+        });
+    }
+
+    // Sort by date (newest first) by default
+    candidates.sort((a, b) => {
+        const dateA = a.appliedAt ? new Date(a.appliedAt) : (a.submittedAt ? new Date(a.submittedAt) : new Date(a.createdAt || 0));
+        const dateB = b.appliedAt ? new Date(b.appliedAt) : (b.submittedAt ? new Date(b.submittedAt) : new Date(b.createdAt || 0));
+        return dateB - dateA; // Newest first
+    });
+
     // Update count
     const countElement = document.getElementById('recruteurFilterCountNumber');
     if (countElement) countElement.textContent = candidates.length;
@@ -7835,6 +8627,8 @@ function getRecruteurFilteredCandidates() {
 function resetRecruteurFilters() {
     document.getElementById('recruteurSearchBar').value = '';
     document.getElementById('recruteurStatusFilter').value = 'all';
+    const dateFilter = document.getElementById('recruteurDateFilter');
+    if (dateFilter) dateFilter.value = '30days'; // Default to last 30 days
     document.getElementById('recruteurDomaineFilter').selectedIndex = -1;
     document.getElementById('recruteurDiplomeFilter').selectedIndex = -1;
     document.getElementById('recruteurPermisFilter').selectedIndex = -1;
@@ -8133,8 +8927,8 @@ function renderLecteurContent() {
     // Render advanced stats
     renderLecteurAdvancedStats();
     
-    // Initialize alerts
-    initializeLecteurAlerts();
+    // Initialize alerts (function removed, keeping for compatibility)
+    // initializeLecteurAlerts();
 }
 
 /* FIX: uniformize-filter-keys */
@@ -8814,17 +9608,24 @@ console.log('🔥 Firebase helper disponible');
 window.firebaseHelper.onAuthChange((user) => {
     if (user) {
         console.log('Utilisateur Firebase connecté:', user.email);
-        // Mettre à jour currentUser si nécessaire
-        if (currentUser.username === 'guest') {
+        // Synchroniser le rôle réel depuis Firestore
+        hydrateUserFromFirestore(user).then((hydrated) => {
+            currentUser = hydrated;
+            updateLoginStatus();
+            updateLoginButton();
+            showNotification(`Connecté en tant que ${hydrated.email}`, 'success');
+        }).catch((err) => {
+            console.error('Erreur hydration user:', err);
             currentUser = {
                 username: user.email,
-                role: 'admin', // À déterminer depuis Firestore
+                email: user.email,
+                role: 'lecteur',
                 isLoggedIn: true,
-                uid: user.uid,
-                email: user.email
+                uid: user.uid
             };
-            showNotification(`Connecté en tant que ${user.email}`, 'success');
-        }
+            updateLoginStatus();
+            updateLoginButton();
+        });
     } else {
         console.log('Aucun utilisateur Firebase connecté');
     }
@@ -8853,14 +9654,20 @@ if (settingsResult.success) {
 }
 
 // Charger les offres d'emploi
-const jobsResult = await window.firebaseHelper.getCollection('jobs', [['active', '==', true]]);
+const jobsResult = await window.firebaseHelper.getCollection(
+    'jobs',
+    [window.firebaseServices.where('active', '==', true)]
+);
 if (jobsResult.success && jobsResult.data.length > 0) {
     siteData.jobs = jobsResult.data;
     console.log('✅ Jobs chargés depuis Firebase:', siteData.jobs.length);
 }
 
 // Charger les services
-const servicesResult = await window.firebaseHelper.getCollection('services', [['active', '==', true]]);
+const servicesResult = await window.firebaseHelper.getCollection(
+    'services',
+    [window.firebaseServices.where('active', '==', true)]
+);
 if (servicesResult.success && servicesResult.data.length > 0) {
     siteData.services = servicesResult.data;
     console.log('✅ Services chargés depuis Firebase:', siteData.services.length);
@@ -8916,24 +9723,8 @@ document.addEventListener('DOMContentLoaded', function() {
     console.log('✅ Website fully initialized with enhanced admin dashboard, prism effects, and ultra-professional design');
 });
 
-function loadSiteData() {
-    try {
-        const savedData = localStorage.getItem('ae2i_site_data');
-        if (savedData) {
-            const parsed = JSON.parse(savedData);
-            siteData = { ...siteData, ...parsed };
-            console.log('✅ Site data loaded successfully');
-        }
-        
-        // Charger le consentement
-        const savedConsent = localStorage.getItem('ae2i_consent');
-        if (savedConsent) {
-            consentStatus = JSON.parse(savedConsent);
-        }
-    } catch (error) {
-        console.error('❌ Error loading site data:', error);
-    }
-}
+// REMOVED: Duplicate loadSiteData function - using the one at line 2553 instead
+// This function was causing conflicts and session restoration issues
 
 function initializeWebsite() {
     updateTheme();
@@ -9309,7 +10100,11 @@ window.downloadLecteurCV = (typeof window.downloadLecteurCV === "function")
         console.warn("downloadCV manquant, fallback utilisé.");
     });
 
-window.previewLecteurCV = previewLecteurCV || previewCV;
+window.previewLecteurCV = (typeof previewLecteurCV === "function")
+    ? previewLecteurCV
+    : (typeof previewCV === "function" ? previewCV : function(id) {
+        console.warn("previewCV manquant, fallback utilisé.");
+    });
 window.executeLecteurScript = executeLecteurScript;
 window.renderLecteurContent = renderLecteurContent;
 window.setupLecteurInteractions = setupLecteurInteractions;
@@ -10037,13 +10832,30 @@ window.addEventListener('firebaseReady', () => {
 console.log('🔔 firebaseReady reçu — set up cvDatabase listener');
 
 if (window.firebaseHelper && typeof window.firebaseHelper.listenToCollection === 'function') {
-// Listen real-time to cvDatabase collection
+// Listen real-time to cvDatabase collection - get ALL documents
+// Use orderBy to ensure we get all documents (Firestore requires orderBy for consistent results)
+const { orderBy } = window.firebaseHelper.firestore || {};
 window.firebaseHelper.listenToCollection('cvDatabase', function(docs) {
-    console.log('🔁 cvDatabase snapshot reçu, count =', docs.length);
+    console.log('🔁 [FIREBASE LISTENER] cvDatabase snapshot reçu, count =', docs.length);
+    console.log('📦 [FIREBASE LISTENER] All document IDs:', docs.map(d => d.id));
+    
+    if (docs.length === 0) {
+        console.warn('⚠️ [FIREBASE LISTENER] No documents received! Check Firebase permissions.');
+        siteData.cvDatabase = [];
+        return;
+    }
+    
+    if (docs.length > 0) {
+        console.log('📦 [FIREBASE LISTENER] First doc sample:', JSON.stringify(docs[0], null, 2));
+        console.log('📦 [FIREBASE LISTENER] First doc keys:', Object.keys(docs[0]));
+    }
+    
+    console.log('📊 [FIREBASE LISTENER] Total documents to process:', docs.length);
 
     // Convertir les timestamps Firebase en dates et normaliser champs attendus par siteData
     const normalized = docs.map(doc => {
-        const d = { id: doc.id, ...doc };
+        const d = { id: doc.id, ...doc.data ? doc.data() : doc };
+        console.log('🔄 [NORMALIZE] Processing doc ID:', doc.id, 'Original fields:', Object.keys(d));
 
         // serverTimestamp fields -> convertir si nécessaire
         if (d.submittedAt && d.submittedAt.toDate) {
@@ -10054,28 +10866,106 @@ window.firebaseHelper.listenToCollection('cvDatabase', function(docs) {
             d.appliedAt = new Date().toISOString();
         }
 
-        // Alignement nom des champs si ton front attend applicantName/jobTitle, etc.
+        // Alignement nom des champs - Firebase uses different field names
+        // Map from Firebase fields to expected fields
         if (!d.applicantName) {
-            d.applicantName = d.fullName || d.cvData?.fullName || d.applicantFullName || 'Candidat';
+            d.applicantName = d.fullName || d.applicantName || d.cvData?.fullName || d.applicantFullName || 
+                ((d.applicantFirstName || '') + ' ' + (d.applicantLastName || '')).trim() || 'Candidat';
         }
         if (!d.jobTitle) {
-            d.jobTitle = d.position || d.job || d.cvData?.position || 'Poste';
+            d.jobTitle = d.position || d.jobTitle || d.job || d.cvData?.position || 'Poste';
+        }
+        
+        // Ensure all required fields exist - map Firebase field names
+        if (!d.applicantEmail) {
+            d.applicantEmail = d.email || d.applicantEmail || '';
+        }
+        if (!d.applicantPhone) {
+            d.applicantPhone = d.phone || d.applicantPhone || '';
+        }
+        if (!d.applicantFirstName && d.applicantName) {
+            // Try to split name if we have full name
+            const nameParts = d.applicantName.split(' ');
+            if (nameParts.length > 0) d.applicantFirstName = nameParts[0];
+        }
+        if (!d.applicantLastName && d.applicantName) {
+            const nameParts = d.applicantName.split(' ');
+            if (nameParts.length > 1) d.applicantLastName = nameParts.slice(1).join(' ');
+        }
+        if (!d.jobId) {
+            d.jobId = d.job_id || d.jobId || null;
+        }
+        
+        // Map CV URL fields
+        if (!d.cvUrl && d.cvR2Url) {
+            d.cvUrl = d.cvR2Url;
+        }
+        if (!d.cvR2Url && d.cvUrl) {
+            d.cvR2Url = d.cvUrl;
+        }
+        
+        console.log('✅ [NORMALIZE] Normalized doc:', {
+            id: d.id,
+            name: d.applicantName,
+            email: d.applicantEmail,
+            phone: d.applicantPhone,
+            jobTitle: d.jobTitle,
+            cvUrl: d.cvUrl || d.cvR2Url
+        });
+
+        // Mapper cvUrl depuis cvUrl ou cvR2Url
+        if (!d.cvR2Url && d.cvUrl) {
+            d.cvR2Url = d.cvUrl;
+        }
+        if (!d.cvUrl && d.cvR2Url) {
+            d.cvUrl = d.cvR2Url;
         }
 
         // processed flag
         d.processed = !!d.processed;
+        
+        // Store Firebase ID for deletion
+        d.firebaseId = doc.id;
 
         return d;
     });
+    
+    console.log('✅ [NORMALIZE] Successfully normalized', normalized.length, 'documents from', docs.length, 'Firebase documents');
+    if (docs.length !== normalized.length) {
+        console.error('❌ [ERROR] Document count mismatch! Firebase sent:', docs.length, 'but normalized:', normalized.length);
+    }
 
     // Remplacer siteData.cvDatabase et re-render les dashboards
     siteData.cvDatabase = normalized;
+    
+    console.log('✅ [UPDATE] cvDatabase mis à jour avec', normalized.length, 'candidatures');
+    console.log('📋 [UPDATE] All candidature IDs:', normalized.map(c => c.id));
+    console.log('📋 [FULL DATA] Détails candidatures:', normalized.map(c => ({
+        id: c.id,
+        name: c.applicantName,
+        email: c.applicantEmail,
+        phone: c.applicantPhone,
+        jobId: c.jobId,
+        jobTitle: c.jobTitle,
+        cvUrl: c.cvUrl,
+        cvR2Url: c.cvR2Url,
+        cvFileName: c.cvFileName,
+        allFields: Object.keys(c)
+    })));
 
     // Re-render les vues pertinentes
     try {
         if (typeof renderAdminCvDatabase === 'function') renderAdminCvDatabase();
-        if (typeof renderRecruteurApplications === 'function') renderRecruteurApplications();
+        if (typeof renderRecruteurApplications === 'function') {
+            renderRecruteurApplications();
+            console.log('✅ Recruteur applications re-rendered');
+        }
+        if (typeof renderRecruteurContent === 'function') {
+            renderRecruteurContent();
+            console.log('✅ Recruteur content re-rendered');
+        }
         if (typeof renderLecteurCvDatabase === 'function') renderLecteurCvDatabase();
+        if (typeof renderLecteurContent === 'function') renderLecteurContent();
         if (typeof updateAnalytics === 'function') updateAnalytics();
     } catch (e) {
         console.error('Erreur lors du re-render après sync CV:', e);
@@ -10627,12 +11517,20 @@ function openCVViewer(cvUrl, candidateName) {
         <div style="width: 100%; max-width: 900px; height: 90%; background: white; border-radius: 12px; overflow: hidden; display: flex; flex-direction: column;">
             <div style="padding: 20px; background: var(--primary); color: white; display: flex; justify-content: space-between; align-items: center;">
                 <h3 style="margin: 0;"><i class="fas fa-file-pdf"></i> CV - ${candidateName}</h3>
-                <button onclick="this.closest('div').parentElement.parentElement.remove()" style="background: transparent; border: none; color: white; font-size: 24px; cursor: pointer;">
-                    <i class="fas fa-times"></i>
-                </button>
+                <div style="display: flex; gap: 12px; align-items: center;">
+                    <button onclick="window.open('${cvUrl}', '_blank').print()" style="background: rgba(255,255,255,0.2); border: 1px solid rgba(255,255,255,0.3); color: white; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 14px;">
+                        <i class="fas fa-print"></i> Imprimer
+                    </button>
+                    <a href="${cvUrl}" download style="background: rgba(255,255,255,0.2); border: 1px solid rgba(255,255,255,0.3); color: white; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 14px; text-decoration: none;">
+                        <i class="fas fa-download"></i> Télécharger
+                    </a>
+                    <button onclick="this.closest('div').parentElement.parentElement.remove()" style="background: transparent; border: none; color: white; font-size: 24px; cursor: pointer;">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
             </div>
             <div style="flex: 1; overflow: auto; padding: 20px;">
-                <iframe src="${cvUrl}" style="width: 100%; height: 100%; border: none;"></iframe>
+                <iframe id="cvViewerFrame" src="${cvUrl}" style="width: 100%; height: 100%; border: none;"></iframe>
             </div>
         </div>
     `;
@@ -10748,8 +11646,864 @@ window.openCVViewer = openCVViewer;
 
 // Lecteur Dashboard
 window.renderLecteurAdvancedStats = renderLecteurAdvancedStats;
-window.initializeLecteurAlerts = initializeLecteurAlerts;
-window.saveLecteurAlert = saveLecteurAlert;
+// Removed: initializeLecteurAlerts and saveLecteurAlert functions
+// window.initializeLecteurAlerts = initializeLecteurAlerts;
+// window.saveLecteurAlert = saveLecteurAlert;
+
+// Version check function for testing
+window.checkCodeVersion = function() {
+    const version = {
+        date: '2025-12-11',
+        build: '1.0.0',
+        features: ['logout-fix', 'session-restoration-fix', 'role-based-routing']
+    };
+    console.log('📦 Code Version:', version);
+    console.log('✅ Logout fix applied:', typeof justLoggedOut !== 'undefined');
+    console.log('✅ Firebase logout available:', typeof logoutFirebase === 'function');
+    return version;
+};
+
+// Inspect Firebase cvDatabase collection - DIRECT QUERY to verify all documents
+window.inspectFirebaseCandidatures = async function() {
+    if (!window.firebaseHelper) {
+        console.error('❌ Firebase helper not available');
+        return;
+    }
+    
+    // First, ensure user document exists for permissions
+    const currentUser = window.currentUser || JSON.parse(localStorage.getItem('ae2i_current_user') || '{}');
+    if (currentUser.uid && currentUser.email && currentUser.role) {
+        console.log('🔧 [INSPECT] Ensuring user document exists for permissions...');
+        await ensureUserDocumentInFirestore(currentUser.uid, currentUser.email, currentUser.role);
+        // Wait a bit for Firestore to update
+        await new Promise(resolve => setTimeout(resolve, 500));
+    }
+    
+    try {
+        console.log('🔍 [INSPECT] Loading ALL candidatures from Firebase cvDatabase collection...');
+        console.log('🔍 [INSPECT] Current user:', currentUser);
+        
+        // Try direct query without any constraints to get ALL documents
+        const result = await window.firebaseHelper.getCollection('cvDatabase', []);
+        
+        if (result.success && result.data) {
+            console.log('✅ [INSPECT] Found', result.data.length, 'candidatures in Firebase (direct query)');
+            console.log('📦 [INSPECT] All document IDs:', result.data.map(d => d.id));
+            console.log('📦 [INSPECT] Raw Firebase data:', result.data);
+            
+            // Compare with listener data
+            console.log('📊 [INSPECT] Listener has', siteData.cvDatabase?.length || 0, 'candidatures');
+            console.log('📊 [INSPECT] Listener IDs:', siteData.cvDatabase?.map(c => c.id) || []);
+            
+            if (result.data.length !== (siteData.cvDatabase?.length || 0)) {
+                console.warn('⚠️ [INSPECT] MISMATCH! Direct query:', result.data.length, 'vs Listener:', siteData.cvDatabase?.length || 0);
+                const missingIds = result.data.map(d => d.id).filter(id => !siteData.cvDatabase?.some(c => c.id === id));
+                if (missingIds.length > 0) {
+                    console.warn('⚠️ [INSPECT] Missing IDs in listener:', missingIds);
+                }
+                const extraIds = (siteData.cvDatabase || []).map(c => c.id).filter(id => !result.data.some(d => d.id === id));
+                if (extraIds.length > 0) {
+                    console.warn('⚠️ [INSPECT] Extra IDs in listener (not in Firebase):', extraIds);
+                }
+            }
+            
+            result.data.forEach((doc, index) => {
+                console.log(`\n📄 [INSPECT] Candidature #${index + 1}:`);
+                console.log('  ID:', doc.id);
+                console.log('  All fields:', Object.keys(doc));
+                console.log('  Name:', doc.applicantName || doc.fullName || doc.applicantFirstName + ' ' + doc.applicantLastName);
+                console.log('  Email:', doc.applicantEmail || doc.email);
+                console.log('  Phone:', doc.applicantPhone || doc.phone);
+                console.log('  Job Title:', doc.jobTitle || doc.position);
+                console.log('  CV URL:', doc.cvUrl || 'NOT SET');
+                console.log('  CV R2 URL:', doc.cvR2Url || 'NOT SET');
+                console.log('  CV File Name:', doc.cvFileName || 'NOT SET');
+                console.log('  Full data:', JSON.stringify(doc, null, 2));
+            });
+            
+            return result.data;
+        } else {
+            console.error('❌ [INSPECT] Failed to load:', result.error);
+            console.error('❌ [INSPECT] Error details:', result);
+            
+            // If permissions error, try to fix and retry
+            if (result.error && result.error.includes('permission')) {
+                console.log('💡 [INSPECT] Permission error detected. User document may be missing.');
+                console.log('💡 [INSPECT] Try running: fixUserPermissions()');
+            }
+            
+            return null;
+        }
+    } catch (error) {
+        console.error('❌ [INSPECT] Error:', error);
+        
+        // If permissions error, suggest fix
+        if (error.message && error.message.includes('permission')) {
+            console.log('💡 [INSPECT] Permission error. Try running: fixUserPermissions()');
+        }
+        
+        return null;
+    }
+};
+
+// Inspect local cvDatabase
+window.inspectLocalCandidatures = function() {
+    console.log('🔍 [INSPECT LOCAL] Current cvDatabase:');
+    console.log('  Count:', siteData.cvDatabase?.length || 0);
+    
+    if (siteData.cvDatabase && siteData.cvDatabase.length > 0) {
+        siteData.cvDatabase.forEach((cv, index) => {
+            console.log(`\n📄 [INSPECT LOCAL] Candidature #${index + 1}:`);
+            console.log('  ID:', cv.id);
+            console.log('  Name:', cv.applicantName);
+            console.log('  Email:', cv.applicantEmail);
+            console.log('  Phone:', cv.applicantPhone);
+            console.log('  Job Title:', cv.jobTitle);
+            console.log('  CV URL:', cv.cvUrl);
+            console.log('  CV R2 URL:', cv.cvR2Url);
+            console.log('  CV File Name:', cv.cvFileName);
+            console.log('  All fields:', Object.keys(cv));
+        });
+    } else {
+        console.log('  ⚠️ No candidatures in local database');
+    }
+    
+    return siteData.cvDatabase;
+};
+
+// Comprehensive logout test function
+window.testLogout = async function() {
+    console.log('🧪 Testing logout functionality...');
+    
+    // Check current state
+    const beforeState = {
+        currentUser: JSON.parse(JSON.stringify(window.currentUser || {})),
+        localStorage: localStorage.getItem('ae2i_current_user'),
+        justLoggedOut: typeof justLoggedOut !== 'undefined' ? justLoggedOut : 'undefined'
+    };
+    console.log('📊 State BEFORE logout:', beforeState);
+    
+    // Perform logout
+    try {
+        await logoutFirebase();
+        console.log('✅ Logout function completed');
+    } catch (error) {
+        console.error('❌ Logout error:', error);
+        return false;
+    }
+    
+    // Wait a bit for async operations
+    await new Promise(resolve => setTimeout(resolve, 500));
+    
+    // Check state after logout
+    const afterState = {
+        currentUser: JSON.parse(JSON.stringify(window.currentUser || {})),
+        localStorage: localStorage.getItem('ae2i_current_user'),
+        isLoggedIn: window.currentUser?.isLoggedIn || false
+    };
+    console.log('📊 State AFTER logout:', afterState);
+    
+    // Verify logout succeeded
+    const logoutSuccess = !afterState.isLoggedIn && !afterState.localStorage;
+    if (logoutSuccess) {
+        console.log('✅ Logout test PASSED - User is logged out');
+    } else {
+        console.error('❌ Logout test FAILED - Session still exists');
+        console.log('Current user:', afterState.currentUser);
+        console.log('LocalStorage:', afterState.localStorage);
+    }
+    
+    return logoutSuccess;
+};
+
+// Force logout function (nuclear option)
+window.forceLogout = function() {
+    console.log('💣 FORCE LOGOUT - Clearing everything...');
+    
+    // Set logout flag
+    if (typeof justLoggedOut !== 'undefined') {
+        justLoggedOut = true;
+    }
+    
+    // Clear Firebase auth
+    if (window.firebaseServices?.auth?.signOut) {
+        window.firebaseServices.auth.signOut().catch(console.error);
+    }
+    if (window.firebaseHelper?.logout) {
+        window.firebaseHelper.logout().catch(console.error);
+    }
+    
+    // Clear all storage
+    localStorage.removeItem('ae2i_current_user');
+    sessionStorage.clear();
+    
+    // Reset user
+    window.currentUser = { username: "guest", role: "guest", isLoggedIn: false };
+    
+    // Update UI
+    if (typeof updateLoginButton === 'function') updateLoginButton();
+    if (typeof updateLoginStatus === 'function') updateLoginStatus();
+    if (typeof showPage === 'function') showPage('home');
+    
+    console.log('✅ Force logout completed');
+    console.log('Current user:', window.currentUser);
+    console.log('LocalStorage session:', localStorage.getItem('ae2i_current_user'));
+    
+    return true;
+};
+
+// Test login button function
+window.testLoginButton = function() {
+    console.log('🧪 Testing login button...');
+    
+    const loginBtn = document.getElementById('loginBtn');
+    const loginModal = document.getElementById('loginModal');
+    
+    if (!loginBtn) {
+        console.error('❌ Login button not found!');
+        return false;
+    }
+    
+    console.log('✅ Login button found');
+    console.log('  - Button text:', loginBtn.textContent);
+    console.log('  - Button innerHTML:', loginBtn.innerHTML);
+    console.log('  - Has "logged-in" class:', loginBtn.classList.contains('logged-in'));
+    console.log('  - Current user:', window.currentUser);
+    console.log('  - Is logged in:', window.currentUser?.isLoggedIn);
+    console.log('  - Login modal exists:', !!loginModal);
+    
+    // Check if button should show login or dashboard
+    const shouldShowLogin = !window.currentUser?.isLoggedIn || window.currentUser?.role === 'guest';
+    
+    if (shouldShowLogin) {
+        console.log('✅ Button should show LOGIN (user is logged out)');
+        console.log('  - Clicking button should open login modal');
+    } else {
+        console.log('✅ Button should show DASHBOARD (user is logged in)');
+        console.log('  - Clicking button should route to dashboard');
+    }
+    
+    return true;
+};
+
+// Open login modal manually
+window.openLoginModal = function() {
+    const loginModal = document.getElementById('loginModal');
+    if (loginModal) {
+        loginModal.classList.add('show');
+        setTimeout(() => {
+            const usernameInput = document.getElementById('loginUsername');
+            if (usernameInput) usernameInput.focus();
+        }, 300);
+        console.log('✅ Login modal opened');
+        return true;
+    } else {
+        console.error('❌ Login modal not found!');
+        return false;
+    }
+};
+
+// Note: inspectFirebaseCandidatures is defined earlier (line ~11628) as an async function
+// that does a DIRECT QUERY to Firebase. This duplicate was removed.
+
+// Inspect local cvDatabase
+window.inspectLocalCandidatures = function() {
+    console.log('🔍 [INSPECT LOCAL] Current cvDatabase:');
+    console.log('  Count:', siteData.cvDatabase?.length || 0);
+    
+    if (siteData.cvDatabase && siteData.cvDatabase.length > 0) {
+        siteData.cvDatabase.forEach((cv, index) => {
+            console.log(`\n📄 [INSPECT LOCAL] Candidature #${index + 1}:`);
+            console.log('  ID:', cv.id);
+            console.log('  Name:', cv.applicantName);
+            console.log('  Email:', cv.applicantEmail);
+            console.log('  Phone:', cv.applicantPhone);
+            console.log('  Job Title:', cv.jobTitle);
+            console.log('  CV URL:', cv.cvUrl);
+            console.log('  CV R2 URL:', cv.cvR2Url);
+            console.log('  CV File Name:', cv.cvFileName);
+            console.log('  All fields:', Object.keys(cv));
+        });
+    } else {
+        console.log('  ⚠️ No candidatures in local database');
+    }
+    
+    return siteData.cvDatabase;
+};
+
+// Check logout status
+window.checkLogoutStatus = function() {
+    const loggedOutFlag = localStorage.getItem('ae2i_logged_out');
+    const savedSession = localStorage.getItem('ae2i_current_user');
+    const currentUserState = window.currentUser;
+    
+    console.log('🔍 [LOGOUT STATUS CHECK]');
+    console.log('  - Logout flag (ae2i_logged_out):', loggedOutFlag);
+    console.log('  - Saved session (ae2i_current_user):', savedSession ? 'EXISTS' : 'NONE');
+    console.log('  - Current user state:', currentUserState);
+    console.log('  - Is logged in:', currentUserState?.isLoggedIn);
+    
+    if (loggedOutFlag === 'true') {
+        console.log('✅ Logout flag is SET - user should stay logged out');
+    } else {
+        console.log('⚠️ Logout flag is NOT SET - session may be restored');
+    }
+    
+    return {
+        logoutFlag: loggedOutFlag,
+        hasSession: !!savedSession,
+        currentUser: currentUserState
+    };
+};
+
+// Force clear logout flag (for testing)
+window.clearLogoutFlag = function() {
+    localStorage.removeItem('ae2i_logged_out');
+    console.log('✅ Logout flag cleared');
+};
+
+// Delete multiple candidatures from Firebase
+window.deleteMultipleCandidatures = async function(cvIds) {
+    if (!Array.isArray(cvIds) || cvIds.length === 0) {
+        console.error('❌ [BULK DELETE] No IDs provided');
+        return { success: false, error: 'No IDs provided' };
+    }
+    
+    // First, ensure user document exists for permissions
+    if (APP_MODE === 'FIREBASE' && window.firebaseHelper && currentUser?.uid) {
+        console.log('🔧 [BULK DELETE] Ensuring user document exists for permissions...');
+        await ensureUserDocumentInFirestore(currentUser.uid, currentUser.email, currentUser.role);
+    }
+    
+    // Skip confirmation if called from deleteAllCandidatures (already confirmed)
+    const skipConfirm = window._skipDeleteConfirm;
+    window._skipDeleteConfirm = false; // Reset flag
+    
+    if (!skipConfirm && !confirm(`Supprimer ${cvIds.length} candidature(s)? Cette action est irréversible.`)) {
+        return { success: false, cancelled: true };
+    }
+    
+    console.log(`🗑️ [BULK DELETE] Deleting ${cvIds.length} candidatures...`);
+    
+    let successCount = 0;
+    let failCount = 0;
+    const errors = [];
+    
+    for (const cvId of cvIds) {
+        try {
+            // Find the candidature
+            let cv = siteData.cvDatabase.find(c => 
+                c.id === cvId || c.id == cvId || String(c.id) === String(cvId) || c.firebaseId === cvId
+            );
+            
+            if (!cv) {
+                console.warn(`⚠️ [BULK DELETE] Candidature not found: ${cvId}`);
+                failCount++;
+                continue;
+            }
+            
+            const firebaseId = cv.firebaseId || cv.id;
+            
+            // Delete from Firebase
+            if (APP_MODE === 'FIREBASE' && window.firebaseHelper && firebaseId) {
+                const result = await window.firebaseHelper.deleteDocument('cvDatabase', firebaseId);
+                if (!result.success) {
+                    console.error(`❌ [BULK DELETE] Failed to delete ${firebaseId}:`, result.error);
+                    errors.push({ id: firebaseId, error: result.error });
+                    failCount++;
+                    continue;
+                }
+            }
+            
+            // Delete from local database
+            const cvIndex = siteData.cvDatabase.findIndex(c => 
+                c.id === cvId || c.id == cvId || String(c.id) === String(cvId) || c.firebaseId === firebaseId
+            );
+            
+            if (cvIndex >= 0) {
+                siteData.cvDatabase.splice(cvIndex, 1);
+                successCount++;
+            }
+        } catch (error) {
+            console.error(`❌ [BULK DELETE] Error deleting ${cvId}:`, error);
+            errors.push({ id: cvId, error: error.message });
+            failCount++;
+        }
+    }
+    
+    // Save local changes
+    if (successCount > 0) {
+        saveSiteData();
+        if (typeof renderAdminCvDatabase === 'function') renderAdminCvDatabase();
+        if (typeof renderRecruteurApplications === 'function') renderRecruteurApplications();
+        if (typeof renderLecteurCvDatabase === 'function') renderLecteurCvDatabase();
+    }
+    
+    const message = `Supprimé: ${successCount}, Échoué: ${failCount}`;
+    if (failCount > 0) {
+        showNotification(message, 'warning');
+        console.error('❌ [BULK DELETE] Errors:', errors);
+    } else {
+        showNotification(`${successCount} candidature(s) supprimée(s)`, 'success');
+    }
+    
+    logActivity(currentUser.username, `Suppression en masse: ${successCount} candidatures`);
+    
+    return { success: true, successCount, failCount, errors };
+};
+
+// Delete all test candidatures (filter by email pattern or name)
+window.deleteTestCandidatures = async function() {
+    const testPatterns = ['test', 'example.com', 'Test', 'TEST'];
+    
+    const testCandidatures = siteData.cvDatabase.filter(cv => {
+        const email = (cv.applicantEmail || cv.email || '').toLowerCase();
+        const name = (cv.applicantName || '').toLowerCase();
+        return testPatterns.some(pattern => 
+            email.includes(pattern.toLowerCase()) || name.includes(pattern.toLowerCase())
+        );
+    });
+    
+    if (testCandidatures.length === 0) {
+        showNotification('Aucune candidature de test trouvée', 'info');
+        return;
+    }
+    
+    console.log(`🔍 [DELETE TESTS] Found ${testCandidatures.length} test candidatures:`, testCandidatures.map(c => ({
+        id: c.id,
+        name: c.applicantName,
+        email: c.applicantEmail
+    })));
+    
+    if (!confirm(`Supprimer ${testCandidatures.length} candidature(s) de test? Cette action est irréversible.`)) {
+        return;
+    }
+    
+    const cvIds = testCandidatures.map(c => c.firebaseId || c.id);
+    return await window.deleteMultipleCandidatures(cvIds);
+};
+
+// Delete all candidatures (use with caution!)
+window.deleteAllCandidatures = async function() {
+    // Check Firebase Auth first
+    if (APP_MODE === 'FIREBASE') {
+        const authUser = window.firebaseServices?.auth?.currentUser;
+        if (!authUser) {
+            console.error('❌ [DELETE ALL] Not authenticated with Firebase Auth!');
+            console.log('💡 Run: await quickLogin()');
+            showNotification('Vous devez être connecté avec Firebase Auth pour supprimer', 'error');
+            return { success: false, error: 'Not authenticated' };
+        }
+        
+        // Ensure user document exists for permissions
+        if (window.firebaseHelper && currentUser?.uid) {
+            console.log('🔧 [DELETE ALL] Ensuring user document exists for permissions...');
+            await ensureUserDocumentInFirestore(currentUser.uid, currentUser.email, currentUser.role);
+        }
+    }
+    
+    const totalCount = siteData.cvDatabase?.length || 0;
+    if (totalCount === 0) {
+        showNotification('Aucune candidature à supprimer', 'info');
+        return { success: true, successCount: 0, failCount: 0 };
+    }
+    
+    if (!confirm(`⚠️ ATTENTION: Supprimer TOUTES les ${totalCount} candidatures? Cette action est irréversible et ne peut pas être annulée!`)) {
+        return { success: false, cancelled: true };
+    }
+    
+    if (!confirm('Êtes-vous ABSOLUMENT SÛR? Cliquez OK pour confirmer.')) {
+        return { success: false, cancelled: true };
+    }
+    
+    console.log(`🗑️ [DELETE ALL] Starting deletion of ${totalCount} candidatures...`);
+    const allIds = siteData.cvDatabase.map(c => c.firebaseId || c.id);
+    window._skipDeleteConfirm = true; // Skip double confirmation in deleteMultipleCandidatures
+    const result = await window.deleteMultipleCandidatures(allIds);
+    
+    if (result.success) {
+        console.log(`✅ [DELETE ALL] Completed: ${result.successCount} deleted, ${result.failCount} failed`);
+        // Refresh UI
+        if (typeof renderAdminCvDatabase === 'function') renderAdminCvDatabase();
+        if (typeof renderRecruteurApplications === 'function') renderRecruteurApplications();
+        if (typeof renderLecteurCvDatabase === 'function') renderLecteurCvDatabase();
+    }
+    
+    return result;
+};
+
+// Fix user permissions - ensure user document exists in Firestore with CORRECT UID
+window.fixUserPermissions = async function() {
+    const currentUser = window.currentUser || JSON.parse(localStorage.getItem('ae2i_current_user') || '{}');
+    
+    if (!currentUser || !currentUser.uid || !currentUser.email) {
+        console.error('❌ No user logged in or missing UID/email');
+        showNotification('Vous devez être connecté', 'error');
+        return;
+    }
+    
+    console.log('🔧 [FIX PERMISSIONS] Current user:', currentUser);
+    console.log('🔧 [FIX PERMISSIONS] Firebase Auth UID:', currentUser.uid);
+    console.log('🔧 [FIX PERMISSIONS] Email:', currentUser.email);
+    console.log('🔧 [FIX PERMISSIONS] Role:', currentUser.role);
+    
+    // Check if document exists with correct UID
+    const userDocByUid = await window.firebaseHelper.getDocument('users', currentUser.uid);
+    
+    if (userDocByUid.success && userDocByUid.data) {
+        console.log('✅ [FIX PERMISSIONS] User document exists with correct UID');
+        // Update role if needed
+        if (userDocByUid.data.role !== currentUser.role) {
+            console.log('📝 [FIX PERMISSIONS] Updating role from', userDocByUid.data.role, 'to', currentUser.role);
+            await window.firebaseHelper.updateDocument('users', currentUser.uid, {
+                role: currentUser.role,
+                email: currentUser.email,
+                updatedAt: new Date().toISOString()
+            });
+        }
+        showNotification('✅ Document existe avec le bon UID. Permissions OK!', 'success');
+        return;
+    }
+    
+    // Document doesn't exist with UID - try to find by email
+    console.log('⚠️ [FIX PERMISSIONS] No document found with UID. Searching by email...');
+    const { where } = window.firebaseServices || {};
+    if (where) {
+        const byEmail = await window.firebaseHelper.getCollection('users', [where('email', '==', currentUser.email)]);
+        
+        if (byEmail.success && byEmail.data && byEmail.data.length > 0) {
+            const oldDoc = byEmail.data[0];
+            console.log('📋 [FIX PERMISSIONS] Found document by email with ID:', oldDoc.id);
+            console.log('📋 [FIX PERMISSIONS] Old document data:', oldDoc);
+            
+            if (oldDoc.id === currentUser.uid) {
+                // IDs match, just update
+                console.log('✅ [FIX PERMISSIONS] Document ID matches UID, updating...');
+                await ensureUserDocumentInFirestore(currentUser.uid, currentUser.email, currentUser.role);
+                showNotification('✅ Document mis à jour avec le bon UID.', 'success');
+                return;
+            }
+            
+            // Create new document with correct UID
+            console.log('📝 [FIX PERMISSIONS] Creating new document with correct UID:', currentUser.uid);
+            const createResult = await window.firebaseHelper.setDocument('users', currentUser.uid, {
+                email: currentUser.email,
+                role: currentUser.role,
+                username: oldDoc.username || currentUser.email.split('@')[0],
+                active: oldDoc.active !== undefined ? oldDoc.active : true,
+                permissions: oldDoc.permissions || [],
+                createdAt: oldDoc.createdAt || new Date().toISOString(),
+                updatedAt: new Date().toISOString()
+            }, false);
+            
+            if (createResult.success) {
+                console.log('✅ [FIX PERMISSIONS] New document created with correct UID');
+                console.log('💡 [FIX PERMISSIONS] Old document ID:', oldDoc.id, '- You can delete it manually in Firebase console');
+                showNotification('✅ Document créé avec le bon UID. L\'ancien document (' + oldDoc.id + ') peut être supprimé.', 'success');
+            } else {
+                console.error('❌ [FIX PERMISSIONS] Failed to create document:', createResult.error);
+                showNotification('❌ Erreur lors de la création du document.', 'error');
+            }
+        } else {
+            // No document found by email - create new one
+            console.log('📝 [FIX PERMISSIONS] No document found by email. Creating new one...');
+            await ensureUserDocumentInFirestore(currentUser.uid, currentUser.email, currentUser.role);
+            showNotification('✅ Nouveau document créé avec le bon UID.', 'success');
+        }
+    } else {
+        // Fallback: just try to create
+        await ensureUserDocumentInFirestore(currentUser.uid, currentUser.email, currentUser.role);
+        showNotification('✅ Permissions vérifiées.', 'success');
+    }
+};
+
+// ============================================
+// DEBUG FUNCTIONS FOR CONSOLE TESTING
+// ============================================
+
+// Debug cvDatabase - Check everything
+window.debugCvDatabase = async function() {
+    console.log('🔍 ===== CV DATABASE DEBUG =====');
+    console.log('');
+    
+    // 1. Check current user
+    console.log('1️⃣ CURRENT USER:');
+    console.log('  - currentUser:', window.currentUser);
+    console.log('  - UID:', window.currentUser?.uid);
+    console.log('  - Email:', window.currentUser?.email);
+    console.log('  - Role:', window.currentUser?.role);
+    console.log('  - IsLoggedIn:', window.currentUser?.isLoggedIn);
+    console.log('');
+    
+    // 2. Check Firebase Auth
+    console.log('2️⃣ FIREBASE AUTH:');
+    const authUser = window.firebaseServices?.auth?.currentUser;
+    console.log('  - Auth User:', authUser);
+    console.log('  - Auth UID:', authUser?.uid);
+    console.log('  - Auth Email:', authUser?.email);
+    console.log('');
+    
+    // 3. Check user document in Firestore
+    console.log('3️⃣ USER DOCUMENT IN FIRESTORE:');
+    if (window.currentUser?.uid && window.firebaseHelper) {
+        try {
+            const userDoc = await window.firebaseHelper.getDocument('users', window.currentUser.uid);
+            console.log('  - User Doc Result:', userDoc);
+            if (userDoc.success && userDoc.data) {
+                console.log('  - ✅ User document exists');
+                console.log('  - Role:', userDoc.data.role);
+                console.log('  - Email:', userDoc.data.email);
+                console.log('  - Permissions:', userDoc.data.permissions);
+            } else {
+                console.log('  - ❌ User document NOT found or error:', userDoc.error);
+            }
+        } catch (e) {
+            console.log('  - ❌ Error getting user document:', e);
+        }
+    } else {
+        console.log('  - ⚠️ No UID or firebaseHelper not available');
+    }
+    console.log('');
+    
+    // 4. Check siteData.cvDatabase (what listener populated)
+    console.log('4️⃣ SITE DATA CV DATABASE (from listener):');
+    console.log('  - Count:', siteData.cvDatabase?.length || 0);
+    console.log('  - All IDs:', siteData.cvDatabase?.map(c => c.id) || []);
+    if (siteData.cvDatabase && siteData.cvDatabase.length > 0) {
+        console.log('  - First 3 documents:');
+        siteData.cvDatabase.slice(0, 3).forEach((cv, i) => {
+            console.log(`    ${i + 1}. ID: ${cv.id}, Name: ${cv.applicantName || cv.fullName}, Email: ${cv.applicantEmail || cv.email}`);
+        });
+    }
+    console.log('');
+    
+    // 5. Direct query to Firebase (bypass listener)
+    console.log('5️⃣ DIRECT FIREBASE QUERY (bypass listener):');
+    if (window.firebaseHelper) {
+        try {
+            const result = await window.firebaseHelper.getCollection('cvDatabase', []);
+            console.log('  - Query Result:', result);
+            if (result.success && result.data) {
+                console.log('  - ✅ Query successful');
+                console.log('  - Count:', result.data.length);
+                console.log('  - All IDs:', result.data.map(d => d.id));
+                console.log('  - First 3 documents:');
+                result.data.slice(0, 3).forEach((doc, i) => {
+                    console.log(`    ${i + 1}. ID: ${doc.id}, Name: ${doc.fullName || doc.applicantName}, Email: ${doc.email || doc.applicantEmail}`);
+                });
+                
+                // Compare with listener data
+                console.log('');
+                console.log('  - COMPARISON:');
+                console.log(`    Listener has: ${siteData.cvDatabase?.length || 0} documents`);
+                console.log(`    Direct query has: ${result.data.length} documents`);
+                if (result.data.length !== (siteData.cvDatabase?.length || 0)) {
+                    console.log('    ⚠️ MISMATCH!');
+                    const listenerIds = (siteData.cvDatabase || []).map(c => c.id);
+                    const queryIds = result.data.map(d => d.id);
+                    const missing = queryIds.filter(id => !listenerIds.includes(id));
+                    const extra = listenerIds.filter(id => !queryIds.includes(id));
+                    if (missing.length > 0) {
+                        console.log('    Missing in listener:', missing);
+                    }
+                    if (extra.length > 0) {
+                        console.log('    Extra in listener:', extra);
+                    }
+                } else {
+                    console.log('    ✅ Counts match!');
+                }
+            } else {
+                console.log('  - ❌ Query failed:', result.error);
+            }
+        } catch (e) {
+            console.log('  - ❌ Error querying:', e);
+        }
+    } else {
+        console.log('  - ⚠️ firebaseHelper not available');
+    }
+    console.log('');
+    
+    // 6. Check Firestore rules (test permission)
+    console.log('6️⃣ PERMISSION TEST:');
+    if (window.firebaseHelper && window.currentUser?.uid) {
+        try {
+            // Try to read one document
+            const testDoc = await window.firebaseHelper.getCollection('cvDatabase', []);
+            if (testDoc.success) {
+                console.log('  - ✅ Permission check passed');
+            } else {
+                console.log('  - ❌ Permission check failed:', testDoc.error);
+            }
+        } catch (e) {
+            console.log('  - ❌ Permission error:', e);
+        }
+    }
+    console.log('');
+    
+    console.log('🔍 ===== END DEBUG =====');
+    return {
+        user: window.currentUser,
+        authUser: authUser,
+        listenerCount: siteData.cvDatabase?.length || 0,
+        listenerIds: siteData.cvDatabase?.map(c => c.id) || []
+    };
+};
+
+// Quick test - Get all candidatures count
+window.getCvCount = function() {
+    console.log('📊 CV Counts:');
+    console.log('  - Listener (siteData.cvDatabase):', siteData.cvDatabase?.length || 0);
+    console.log('  - Current user:', window.currentUser?.role);
+    return siteData.cvDatabase?.length || 0;
+};
+
+// Force Firebase Auth login using stored credentials
+window.forceFirebaseLogin = async function() {
+    console.log('🔐 ===== FORCE FIREBASE LOGIN =====');
+    
+    const currentUser = window.currentUser || JSON.parse(localStorage.getItem('ae2i_current_user') || '{}');
+    
+    if (!currentUser.email) {
+        console.error('❌ No email found in currentUser. You need to log in through the login form.');
+        return false;
+    }
+    
+    console.log('📧 Email:', currentUser.email);
+    console.log('💡 You need to enter your password to authenticate with Firebase.');
+    console.log('💡 Run: await forceFirebaseLoginWithPassword("your_password")');
+    
+    return false;
+};
+
+// Force Firebase Auth login with password
+window.forceFirebaseLoginWithPassword = async function(password) {
+    console.log('🔐 ===== FORCE FIREBASE LOGIN WITH PASSWORD =====');
+    
+    const currentUser = window.currentUser || JSON.parse(localStorage.getItem('ae2i_current_user') || '{}');
+    
+    if (!currentUser.email) {
+        console.error('❌ No email found in currentUser');
+        return false;
+    }
+    
+    if (!password) {
+        console.error('❌ Password required');
+        return false;
+    }
+    
+    console.log('🔐 Attempting Firebase Auth login for:', currentUser.email);
+    
+    try {
+        if (!window.firebaseHelper || !window.firebaseHelper.login) {
+            console.error('❌ FirebaseHelper not available');
+            return false;
+        }
+        
+        const result = await window.firebaseHelper.login(currentUser.email, password);
+        
+        if (result.success) {
+            console.log('✅ Firebase Auth login successful!');
+            console.log('✅ User:', result.user);
+            console.log('💡 Wait a few seconds for the listener to sync...');
+            return true;
+        } else {
+            console.error('❌ Login failed:', result.error);
+            return false;
+        }
+    } catch (error) {
+        console.error('❌ Login error:', error);
+        return false;
+    }
+};
+
+// Check Firebase Auth status
+window.checkFirebaseAuth = function() {
+    console.log('🔍 ===== FIREBASE AUTH STATUS =====');
+    const authUser = window.firebaseServices?.auth?.currentUser;
+    console.log('  - Firebase Auth User:', authUser);
+    console.log('  - Is Authenticated:', authUser !== null);
+    console.log('  - Current User (localStorage):', window.currentUser);
+    console.log('  - Match:', authUser?.uid === window.currentUser?.uid);
+    
+    if (!authUser) {
+        console.log('');
+        console.log('⚠️ NOT AUTHENTICATED WITH FIREBASE!');
+        console.log('💡 You need to log in through Firebase Auth.');
+        console.log('💡 Options:');
+        console.log('  1. Use the login form (click login button)');
+        console.log('  2. Run: await forceFirebaseLoginWithPassword("your_password")');
+        console.log('  3. Run: await quickLogin() - will prompt for password');
+    }
+    
+    return authUser;
+};
+
+// Quick login helper - prompts for password
+window.quickLogin = async function() {
+    const currentUser = window.currentUser || JSON.parse(localStorage.getItem('ae2i_current_user') || '{}');
+    
+    if (!currentUser.email) {
+        console.error('❌ No email found. Please use the login form.');
+        return false;
+    }
+    
+    const password = prompt(`Enter password for ${currentUser.email}:`);
+    if (!password) {
+        console.log('❌ Login cancelled');
+        return false;
+    }
+    
+    console.log('🔐 Logging in...');
+    const result = await forceFirebaseLoginWithPassword(password);
+    
+    if (result) {
+        console.log('✅ Login successful! Waiting for listener to sync...');
+        console.log('💡 Run: await debugCvDatabase() in a few seconds');
+    }
+    
+    return result;
+};
+
+// Auto-restore Firebase Auth session if localStorage has user but Firebase Auth is null
+window.autoRestoreFirebaseAuth = async function() {
+    console.log('🔄 ===== AUTO-RESTORE FIREBASE AUTH =====');
+    
+    const authUser = window.firebaseServices?.auth?.currentUser;
+    const savedUser = JSON.parse(localStorage.getItem('ae2i_current_user') || '{}');
+    
+    console.log('  - Firebase Auth User:', authUser ? '✅ Authenticated' : '❌ Not authenticated');
+    console.log('  - Saved User:', savedUser.email || 'None');
+    
+    if (authUser) {
+        console.log('✅ Already authenticated with Firebase Auth');
+        return true;
+    }
+    
+    if (!savedUser.email) {
+        console.log('⚠️ No saved user found. Please log in.');
+        return false;
+    }
+    
+    console.log('');
+    console.log('⚠️ Firebase Auth session expired but localStorage has user.');
+    console.log('💡 You need to log in again through Firebase Auth.');
+    console.log('💡 Run: await quickLogin()');
+    console.log('💡 Or use the login button in the UI');
+    
+    return false;
+};
+
+// Force refresh listener
+window.refreshCvListener = function() {
+    console.log('🔄 Refreshing cvDatabase listener...');
+    if (window.firebaseHelper && typeof window.firebaseHelper.listenToCollection === 'function') {
+        // The listener should already be active, but we can check
+        console.log('✅ Listener should be active');
+        console.log('💡 Try refreshing the page to restart listener');
+    } else {
+        console.log('❌ Listener not available');
+    }
+};
 
 console.log('🎉 AE2I Enhanced Ultra-Professional Site - Multi-role System with Advanced Features + Autosave Initialized Successfully');
 // ============================================

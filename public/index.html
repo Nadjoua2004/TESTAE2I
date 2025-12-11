@@ -142,10 +142,12 @@
 
     <!-- FIX: remove-loading-screen -->
 
-    <!-- Scroll to Top Button -->
+    <!-- Scroll to Top Button (désactivé) -->
+    <!--
     <button class="scroll-to-top functional-btn" id="scrollToTop" aria-label="Remonter en haut de la page">
         <i class="fas fa-chevron-up" aria-hidden="true"></i>
     </button>
+    -->
 
     <!-- Header CORRIGÉ avec structure CSS Grid claire -->
     <header role="banner">
@@ -3241,6 +3243,20 @@
                                     <input type="number" id="recruteurExperienceMax" class="form-control recruteur-filter" placeholder="Max" min="0" max="40" style="width: 80px;">
                                     <span data-fr="ans" data-en="years" data-ar="سنوات">ans</span>
                                 </div>
+                            </div>
+
+                            <!-- Filtre Date (NOUVEAU) - Show only recent candidatures -->
+                            <div class="form-group" style="margin: 0;">
+                                <label style="font-weight: 600; margin-bottom: 8px; display: block;">
+                                    <i class="fas fa-calendar-alt"></i> <span data-fr="Date de candidature" data-en="Application Date" data-ar="تاريخ التقديم">Date de candidature</span>
+                                </label>
+                                <select id="recruteurDateFilter" class="form-control recruteur-filter">
+                                    <option value="all" data-fr="Toutes les dates" data-en="All dates" data-ar="جميع التواريخ">Toutes les dates</option>
+                                    <option value="today" data-fr="Aujourd'hui" data-en="Today" data-ar="اليوم">Aujourd'hui</option>
+                                    <option value="7days" data-fr="7 derniers jours" data-en="Last 7 days" data-ar="آخر 7 أيام">7 derniers jours</option>
+                                    <option value="30days" selected data-fr="30 derniers jours" data-en="Last 30 days" data-ar="آخر 30 يوم">30 derniers jours</option>
+                                    <option value="90days" data-fr="90 derniers jours" data-en="Last 90 days" data-ar="آخر 90 يوم">90 derniers jours</option>
+                                </select>
                             </div>
                         </div>
                     </div>

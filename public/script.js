@@ -1634,7 +1634,7 @@ function checkPageAccess(pageId) {
             console.log('❌ [ACCESS CHECK] Session localStorage:', localStorage.getItem('ae2i_current_user'));
             showNotification(siteData.language === 'en' ? 'Administrator access required' : 'Accès administrateur requis', 'error');
             // Ne pas appeler showPage('home') ici pour éviter la récursion
-            return false;
+        return false;
         }
     }
     
@@ -1688,19 +1688,19 @@ function routeToDashboard(role) {
     const r = (role || '').toLowerCase();
     console.log('[NAV] routeToDashboard role=', r, 'currentUser=', JSON.stringify(currentUser));
     try {
-        if (r === 'admin') {
+    if (r === 'admin') {
             console.log('[NAV] showPage(admin) - calling now...');
-            showPage('admin');
+        showPage('admin');
             console.log('[NAV] showPage(admin) - call completed');
-        } else if (r === 'recruteur' || r === 'recruiter') {
-            console.log('[NAV] showPage(recruteur)');
-            showPage('recruteur');
-        } else if (r === 'lecteur' || r === 'reader') {
-            console.log('[NAV] showPage(lecteur)');
-            showPage('lecteur');
-        } else {
-            console.log('[NAV] showPage(home) fallback');
-            showPage('home');
+    } else if (r === 'recruteur' || r === 'recruiter') {
+        console.log('[NAV] showPage(recruteur)');
+        showPage('recruteur');
+    } else if (r === 'lecteur' || r === 'reader') {
+        console.log('[NAV] showPage(lecteur)');
+        showPage('lecteur');
+    } else {
+        console.log('[NAV] showPage(home) fallback');
+        showPage('home');
         }
     } catch (error) {
         console.error('[NAV] ❌ Error in routeToDashboard:', error);
@@ -2008,7 +2008,7 @@ function setupLoginSystem() {
             // Si non connecté, afficher la modale de connexion
             console.log('🔓 [LOGIN BTN CLICK] Utilisateur non connecté, affichage modale');
             if (loginModal) {
-                loginModal.classList.add('show');
+            loginModal.classList.add('show');
                 setTimeout(() => {
                     const usernameInput = document.getElementById('loginUsername');
                     if (usernameInput) usernameInput.focus();
@@ -2244,7 +2244,7 @@ function updateLoginStatus() {
 async function logout() {
     console.log('🔴 [LOGOUT] Fonction logout() appelée');
     if (currentUser && currentUser.username && currentUser.username !== 'guest') {
-        logActivity(currentUser.username, 'Déconnexion');
+    logActivity(currentUser.username, 'Déconnexion');
     }
 
     // Sign out from Firebase first
@@ -2690,20 +2690,20 @@ function forceSaveData() {
         ---------------------------- */
         // Ne pas restaurer la session si logout récent
         if (!justLoggedOut) {
-            try {
-                const savedSession = localStorage.getItem('ae2i_current_user');
+        try {
+            const savedSession = localStorage.getItem('ae2i_current_user');
 
-                if (savedSession) {
-                    const parsed = JSON.parse(savedSession);
+            if (savedSession) {
+                const parsed = JSON.parse(savedSession);
 
                     // Si la session sauvée est connectée mais currentUser == guest → NE PAS ÉCRASER (sauf après logout)
                     if (parsed.isLoggedIn && (!currentUser || !currentUser.isLoggedIn) && !justLoggedOut) {
-                        console.log("💾 [PATCH] Empêche écrasement — restauration utilisateur connecté.");
-                        currentUser = parsed;
-                    }
+                    console.log("💾 [PATCH] Empêche écrasement — restauration utilisateur connecté.");
+                    currentUser = parsed;
                 }
-            } catch (e) {
-                console.warn("⚠️ Erreur analyse session:", e);
+            }
+        } catch (e) {
+            console.warn("⚠️ Erreur analyse session:", e);
             }
         } else {
             console.log("⏸️ [SAVE] Logout récent détecté, skip restauration session");
@@ -2718,8 +2718,8 @@ function forceSaveData() {
             if (justLoggedOut) {
                 localStorage.removeItem("ae2i_current_user");
                 console.log("💾 [SAVE] Logout récent → session supprimée de localStorage");
-            } else {
-                console.log("💾 [SAVE] Aucun user connecté → pas de remplacement.");
+        } else {
+            console.log("💾 [SAVE] Aucun user connecté → pas de remplacement.");
             }
         }
 
@@ -2778,7 +2778,7 @@ function forceSaveData() {
 
         console.log('✅ Données sauvegardées avec succès (vérifiées)');
         if (currentUser && currentUser.isLoggedIn && !justLoggedOut) {
-            console.log('✅ Session préservée après sauvegarde:', currentUser.username, currentUser.role);
+        console.log('✅ Session préservée après sauvegarde:', currentUser.username, currentUser.role);
         } else {
             console.log('✅ Aucune session active après sauvegarde');
         }
@@ -2888,18 +2888,18 @@ console.error("❌ [RESTORE] Erreur restauration session:", e);
                 // Restaurer la session utilisateur si elle existe (sauf après logout)
                 const loggedOutFlag = localStorage.getItem('ae2i_logged_out');
                 if (loggedOutFlag !== 'true' && !justLoggedOut) {
-                    const savedSession = localStorage.getItem('ae2i_current_user');
-                    if (savedSession) {
-                        try {
-                            const sessionData = JSON.parse(savedSession);
-                            if (sessionData && sessionData.isLoggedIn) {
-                                currentUser = sessionData;
-                                console.log('✅ Session restaurée:', currentUser.username, 'Role:', currentUser.role);
-                            }
-                        } catch (e) {
-                            console.error('❌ Erreur restauration session:', e);
-                            localStorage.removeItem('ae2i_current_user');
+                const savedSession = localStorage.getItem('ae2i_current_user');
+                if (savedSession) {
+                    try {
+                        const sessionData = JSON.parse(savedSession);
+                        if (sessionData && sessionData.isLoggedIn) {
+                            currentUser = sessionData;
+                            console.log('✅ Session restaurée:', currentUser.username, 'Role:', currentUser.role);
                         }
+                    } catch (e) {
+                        console.error('❌ Erreur restauration session:', e);
+                        localStorage.removeItem('ae2i_current_user');
+                    }
                     }
                 } else {
                     console.log('⏸️ [RESTORE] Logout détecté (flag ou récent), skip restauration session dans loadSiteData');
@@ -4617,6 +4617,13 @@ function showAdminTab(tabId) {
             updateContactStats();
         } else if (tabId === 'hero') {
             initializeHeroSettings();
+        } else if (tabId === 'users') {
+            if (typeof renderAdminUsers === 'function') {
+                renderAdminUsers();
+            }
+            if (typeof renderAuditLog === 'function') {
+                renderAuditLog();
+            }
         } else if (tabId === 'roles') {
             renderRolesManagement();
         } else if (tabId === 'audit') {
@@ -4644,6 +4651,63 @@ function initializeHeroSettings() {
         document.getElementById('descriptionGradientStart').value = siteData.descriptionGradient.start;
         document.getElementById('descriptionGradientEnd').value = siteData.descriptionGradient.end;
     }
+    
+    // Restore hero title size
+    if (siteData.heroSizes && siteData.heroSizes.title) {
+        const titleSize = siteData.heroSizes.title;
+        const heroTitleSizeSlider = document.getElementById('heroTitleSize');
+        const heroTitleSizeValue = document.getElementById('heroTitleSizeValue');
+        const heroTitle = document.getElementById('heroTitle');
+        
+        if (heroTitleSizeSlider) {
+            heroTitleSizeSlider.value = titleSize;
+        }
+        if (heroTitleSizeValue) {
+            heroTitleSizeValue.textContent = titleSize + 'px';
+        }
+        if (heroTitle) {
+            heroTitle.style.fontSize = titleSize + 'px';
+        }
+    }
+    
+    // Restore hero subtitle size
+    if (siteData.heroSizes && siteData.heroSizes.subtitle) {
+        const subtitleSize = siteData.heroSizes.subtitle;
+        const heroSubtitleSizeSlider = document.getElementById('heroSubtitleSize');
+        const heroSubtitleSizeValue = document.getElementById('heroSubtitleSizeValue');
+        const heroSubtitle = document.getElementById('heroSubtitle');
+        
+        if (heroSubtitleSizeSlider) {
+            heroSubtitleSizeSlider.value = subtitleSize;
+        }
+        if (heroSubtitleSizeValue) {
+            heroSubtitleSizeValue.textContent = subtitleSize + 'px';
+        }
+        if (heroSubtitle) {
+            heroSubtitle.style.fontSize = subtitleSize + 'px';
+        }
+    }
+    
+    // Restore subtitle formatting
+    if (siteData.subtitleFormatting) {
+        const heroSubtitle = document.getElementById('heroSubtitle');
+        if (heroSubtitle) {
+            heroSubtitle.style.fontWeight = siteData.subtitleFormatting.bold ? '700' : '400';
+            heroSubtitle.style.fontStyle = siteData.subtitleFormatting.italic ? 'italic' : 'normal';
+            heroSubtitle.style.textDecoration = siteData.subtitleFormatting.underline ? 'underline' : 'none';
+        }
+    }
+    
+    // Restore title formatting
+    if (siteData.titleFormatting) {
+        const heroTitle = document.getElementById('heroTitle');
+        if (heroTitle) {
+            heroTitle.style.fontWeight = siteData.titleFormatting.bold ? '700' : '400';
+            heroTitle.style.fontStyle = siteData.titleFormatting.italic ? 'italic' : 'normal';
+            heroTitle.style.textDecoration = siteData.titleFormatting.underline ? 'underline' : 'none';
+        }
+    }
+    
     updateGradientPreviews();
 }
 
@@ -5135,6 +5199,10 @@ function updateSiteTitle() {
             heroTitle.style.fontStyle = siteData.titleFormatting.italic ? 'italic' : 'normal';
             heroTitle.style.textDecoration = siteData.titleFormatting.underline ? 'underline' : 'none';
         }
+        // Réappliquer la taille si définie
+        if (siteData.heroSizes && siteData.heroSizes.title) {
+            heroTitle.style.fontSize = siteData.heroSizes.title + 'px';
+        }
     }
 
     if (forceSaveData()) {
@@ -5159,6 +5227,16 @@ function updateSiteSlogan() {
             heroSubtitle.style.webkitBackgroundClip = 'text';
             heroSubtitle.style.webkitTextFillColor = 'transparent';
             heroSubtitle.style.backgroundClip = 'text';
+        }
+        // Réappliquer le formatage si défini
+        if (siteData.subtitleFormatting) {
+            heroSubtitle.style.fontWeight = siteData.subtitleFormatting.bold ? '700' : '400';
+            heroSubtitle.style.fontStyle = siteData.subtitleFormatting.italic ? 'italic' : 'normal';
+            heroSubtitle.style.textDecoration = siteData.subtitleFormatting.underline ? 'underline' : 'none';
+        }
+        // Réappliquer la taille si définie
+        if (siteData.heroSizes && siteData.heroSizes.subtitle) {
+            heroSubtitle.style.fontSize = siteData.heroSizes.subtitle + 'px';
         }
     }
     
@@ -5744,6 +5822,25 @@ function renderAdminUsers() {
     const container = document.getElementById('adminUsersList');
     if (container) {
         container.innerHTML = '';
+        
+        // Ensure users array exists
+        if (!siteData.users || !Array.isArray(siteData.users)) {
+            siteData.users = [];
+            console.log('⚠️ [RENDER USERS] Users array not found, initializing empty array');
+        }
+        
+        // Show message if no users
+        if (siteData.users.length === 0) {
+            container.innerHTML = `
+                <div style="text-align: center; padding: 40px; background: var(--bg-alt); border-radius: var(--border-radius-lg); color: var(--text-light);">
+                    <i class="fas fa-users" style="font-size: 48px; margin-bottom: 16px; opacity: 0.5;"></i>
+                    <p style="font-size: var(--font-size-lg);">${siteData.language === 'en' ? 'No users found. Click "Add User" to create one.' : 'Aucun utilisateur trouvé. Cliquez sur "Ajouter un utilisateur" pour en créer un.'}</p>
+                </div>
+            `;
+            renderAuditLog();
+            return;
+        }
+        
         siteData.users.forEach((user, index) => {
             if (user.role !== 'admin') { // Ne pas afficher l'admin dans la liste
                 const userItem = document.createElement('div');
@@ -5762,7 +5859,7 @@ function renderAdminUsers() {
                         <h4 style="font-size: var(--font-size-xl); font-weight: 800; display: flex; align-items: center; gap: 12px;">
                             <i class="fas fa-user-circle" style="color: var(--primary);"></i>
                             ${user.username} 
-                            <span style="background: ${user.role === 'recruiter' ? 'var(--accent)' : user.role === 'reader' ? 'var(--warning)' : 'var(--info)'}; color: white; padding: 4px 12px; border-radius: var(--border-radius-full); font-size: var(--font-size-xs); font-weight: 700; text-transform: uppercase;">${user.role}</span>
+                            <span style="background: ${user.role === 'recruteur' || user.role === 'recruiter' ? 'var(--accent)' : user.role === 'lecteur' || user.role === 'reader' ? 'var(--warning)' : user.role === 'editor' ? 'var(--info)' : 'var(--primary)'}; color: white; padding: 4px 12px; border-radius: var(--border-radius-full); font-size: var(--font-size-xs); font-weight: 700; text-transform: uppercase;">${user.role === 'recruteur' ? 'Recruteur' : user.role === 'lecteur' ? 'Lecteur' : user.role === 'recruiter' ? 'Recruteur' : user.role === 'reader' ? 'Lecteur' : user.role === 'admin' ? 'Admin' : user.role === 'editor' ? 'Éditeur' : user.role}</span>
                         </h4>
                         <span class="status-badge ${user.active ? 'status-active' : 'status-inactive'}">
                             <i class="fas fa-${user.active ? 'check' : 'times'}"></i>
@@ -5790,7 +5887,7 @@ function renderAdminUsers() {
                     <div style="background: rgba(0, 86, 179, 0.05); padding: 16px; border-radius: var(--border-radius); margin-bottom: 16px; border-left: 4px solid var(--primary);">
                         <strong style="color: var(--primary);">Permissions:</strong>
                         <p style="color: var(--text-light); margin-top: 8px; font-size: var(--font-size-sm);">
-                            ${roleDescriptions[siteData.language][user.role]}
+                            ${roleDescriptions[siteData.language][user.role] || roleDescriptions[siteData.language][user.role === 'recruteur' ? 'recruiter' : user.role === 'lecteur' ? 'reader' : user.role] || 'Aucune description disponible'}
                         </p>
                     </div>
                     <div style="display: flex; gap: 12px; flex-wrap: wrap; justify-content: center;">
@@ -6541,55 +6638,205 @@ function setupAdminForms() {
     /* FIX: Use onsubmit instead of addEventListener to prevent duplicate submissions */
     const userForm = document.getElementById('userForm');
     if (userForm) {
-        userForm.onsubmit = function(e) {
+        userForm.onsubmit = async function(e) {
             e.preventDefault();
 
-            console.log('🔍 [DEBUG] Début création utilisateur');
-            console.log('🔍 [DEBUG] currentUser avant sauvegarde:', JSON.stringify(currentUser));
+            const submitBtn = userForm.querySelector('button[type="submit"]');
+            const originalText = submitBtn?.textContent;
+            if (submitBtn) {
+                submitBtn.disabled = true;
+                submitBtn.textContent = 'Création en cours...';
+            }
 
-            const username = document.getElementById('userName').value;
-            const email = document.getElementById('userEmail').value;
-            const role = document.getElementById('userRole').value;
+            try {
+                console.log('🔍 [CREATE USER] Début création utilisateur');
+
+                const username = document.getElementById('userName').value.trim();
+                const email = document.getElementById('userEmail').value.trim().toLowerCase();
+                const roleInput = document.getElementById('userRole').value;
             const password = document.getElementById('userPassword').value;
 
-            const userData = {
-                id: currentEditingIndex >= 0 ? siteData.users[currentEditingIndex].id : Date.now(),
+                // Map role: recruiter -> recruteur, reader -> lecteur
+                const roleMap = {
+                    'recruiter': 'recruteur',
+                    'reader': 'lecteur',
+                    'admin': 'admin',
+                    'editor': 'editor'
+                };
+                const role = roleMap[roleInput] || roleInput;
+                const isEditing = currentEditingIndex >= 0;
+                const existingUser = isEditing ? siteData.users[currentEditingIndex] : null;
+
+                if (!username || !email || !role) {
+                    showNotification('Veuillez remplir tous les champs obligatoires', 'error');
+                    if (submitBtn) {
+                        submitBtn.disabled = false;
+                        submitBtn.textContent = originalText;
+                    }
+                    return;
+                }
+
+                // Password is required only when creating new user
+                if (!isEditing && !password) {
+                    showNotification('Le mot de passe est requis pour créer un nouvel utilisateur', 'error');
+                    if (submitBtn) {
+                        submitBtn.disabled = false;
+                        submitBtn.textContent = originalText;
+                    }
+                    return;
+                }
+
+                // Validate password length if provided
+                if (password && password.length < 6) {
+                    showNotification('Le mot de passe doit contenir au moins 6 caractères', 'error');
+                    if (submitBtn) {
+                        submitBtn.disabled = false;
+                        submitBtn.textContent = originalText;
+                    }
+                    return;
+                }
+
+                let firebaseUid = existingUser?.uid || null;
+
+                // If Firebase mode, create or update Firebase Auth user and Firestore document
+                if (APP_MODE === 'FIREBASE' && window.firebaseServices && window.firebaseHelper) {
+                    if (isEditing && firebaseUid) {
+                        // Update existing user in Firestore
+                        console.log('📝 [UPDATE USER] Updating Firestore user document:', firebaseUid);
+                        try {
+                            const firestoreResult = await window.firebaseHelper.updateDocument('users', firebaseUid, {
+                                email: email,
                 username: username,
+                                role: role,
+                                updatedAt: new Date().toISOString()
+                            });
+
+                            if (firestoreResult.success) {
+                                console.log('✅ [UPDATE USER] Firestore user document updated');
+                            } else {
+                                console.warn('⚠️ [UPDATE USER] Firestore document update failed:', firestoreResult.error);
+                                showNotification('Erreur lors de la mise à jour Firestore: ' + firestoreResult.error, 'warning');
+                            }
+                        } catch (error) {
+                            console.error('❌ [UPDATE USER] Firestore update error:', error);
+                            showNotification('Erreur lors de la mise à jour: ' + error.message, 'error');
+                        }
+                    } else if (!isEditing) {
+                        // Create new Firebase Auth user
+                        console.log('🔥 [CREATE USER] Creating Firebase Auth user:', email);
+                        try {
+                            const userCredential = await window.firebaseServices.createUserWithEmailAndPassword(email, password);
+                            firebaseUid = userCredential.user.uid;
+                            console.log('✅ [CREATE USER] Firebase Auth user created:', firebaseUid);
+
+                            // Create Firestore user document
+                            console.log('📝 [CREATE USER] Creating Firestore user document:', firebaseUid);
+                            const firestoreResult = await window.firebaseHelper.setDocument('users', firebaseUid, {
                 email: email,
+                                username: username,
                 role: role,
-                password: password,
                 active: true,
-                createdAt: currentEditingIndex >= 0 ? siteData.users[currentEditingIndex].createdAt : new Date().toISOString(),
+                                createdAt: new Date().toISOString(),
+                                updatedAt: new Date().toISOString()
+                            }, false); // false = don't merge, create new
+
+                            if (firestoreResult.success) {
+                                console.log('✅ [CREATE USER] Firestore user document created');
+                            } else {
+                                console.warn('⚠️ [CREATE USER] Firestore document creation failed:', firestoreResult.error);
+                                showNotification('Utilisateur créé mais erreur Firestore: ' + firestoreResult.error, 'warning');
+                            }
+                        } catch (error) {
+                            console.error('❌ [CREATE USER] Firebase Auth creation error:', error);
+                            
+                            // Handle specific errors
+                            if (error.code === 'auth/email-already-in-use') {
+                                showNotification('Cet email est déjà utilisé. Veuillez utiliser un autre email.', 'error');
+                            } else if (error.code === 'auth/invalid-email') {
+                                showNotification('Email invalide. Veuillez vérifier l\'adresse email.', 'error');
+                            } else if (error.code === 'auth/weak-password') {
+                                showNotification('Mot de passe trop faible. Utilisez au moins 6 caractères.', 'error');
+                            } else {
+                                showNotification(`Erreur lors de la création: ${error.message}`, 'error');
+                            }
+                            
+                            if (submitBtn) {
+                                submitBtn.disabled = false;
+                                submitBtn.textContent = originalText;
+                            }
+                            return;
+                        }
+                    }
+                }
+
+                // Prepare user data for local storage
+                const userData = {
+                    id: isEditing ? siteData.users[currentEditingIndex].id : Date.now(),
+                    username: username,
+                    email: email,
+                    role: role,
+                    active: isEditing ? (siteData.users[currentEditingIndex].active !== undefined ? siteData.users[currentEditingIndex].active : true) : true,
+                    createdAt: isEditing ? siteData.users[currentEditingIndex].createdAt : new Date().toISOString(),
                 updatedAt: new Date().toISOString()
             };
 
-            if (currentEditingIndex >= 0) {
+                // Keep password only if provided (for local mode compatibility)
+                if (password) {
+                    userData.password = password;
+                } else if (isEditing && existingUser?.password) {
+                    // Keep existing password if not changed
+                    userData.password = existingUser.password;
+                }
+
+                // Add Firebase UID if available
+                if (firebaseUid) {
+                    userData.uid = firebaseUid;
+                }
+
+                // Update or add to local storage
+                if (isEditing) {
                 siteData.users[currentEditingIndex] = { ...siteData.users[currentEditingIndex], ...userData };
-                logActivity(currentUser.username, `Utilisateur modifié: ${username}`);
+                    logActivity(currentUser.username, `Utilisateur modifié: ${username} (${role})`);
             } else {
+                    if (!siteData.users) siteData.users = [];
                 siteData.users.push(userData);
                 logActivity(currentUser.username, `Utilisateur créé: ${username} (${role})`);
             }
 
-            console.log('🔍 [DEBUG] currentUser après ajout:', JSON.stringify(currentUser));
-
+                // Save to local storage
             if (forceSaveData()) {
-                console.log('🔍 [DEBUG] currentUser après forceSaveData:', JSON.stringify(currentUser));
-
-                // RE-SAUVEGARDER la session après forceSaveData
-                localStorage.setItem('ae2i_current_user', JSON.stringify(currentUser));
-
                 renderAdminUsers();
                 closeModal('userModal');
                 showNotification(currentEditingIndex >= 0 ?
                     (siteData.language === 'en' ? 'User updated successfully!' : 'Utilisateur modifié avec succès!') :
                     (siteData.language === 'en' ? 'User created successfully!' : 'Utilisateur créé avec succès!'), 'success');
 
+                    // Reset form
                 currentEditingIndex = -1;
-
-                console.log('🔍 [DEBUG] currentUser final:', JSON.stringify(currentUser));
+                    userForm.reset();
+                    
+                    // Reset password field requirement
+                    const passwordField = document.getElementById('userPassword');
+                    if (passwordField) {
+                        passwordField.required = true;
+                    }
+                    
+                    // Reset submit button text
+                    const submitBtn = userForm.querySelector('button[type="submit"]');
+                    if (submitBtn) {
+                        submitBtn.textContent = siteData.language === 'en' ? 'Save' : 'Sauvegarder';
+                    }
             } else {
-                showNotification('Échec de sauvegarde de l\'utilisateur', 'error');
+                    showNotification('Échec de sauvegarde locale de l\'utilisateur', 'error');
+                }
+            } catch (error) {
+                console.error('❌ [CREATE USER] Unexpected error:', error);
+                showNotification(`Erreur inattendue: ${error.message}`, 'error');
+            } finally {
+                if (submitBtn) {
+                    submitBtn.disabled = false;
+                    submitBtn.textContent = originalText;
+                }
             }
         };
     }
@@ -7372,10 +7619,28 @@ function editUser(index) {
     const user = siteData.users[index];
     currentEditingIndex = index;
     currentEditingType = 'user';
-    document.getElementById('userName').value = user.username;
-    document.getElementById('userEmail').value = user.email;
-    document.getElementById('userRole').value = user.role;
+    document.getElementById('userName').value = user.username || '';
+    document.getElementById('userEmail').value = user.email || '';
+    
+    // Map role back for form display: recruteur -> recruiter, lecteur -> reader
+    const roleMap = {
+        'recruteur': 'recruiter',
+        'lecteur': 'reader',
+        'admin': 'admin',
+        'editor': 'editor'
+    };
+    const formRole = roleMap[user.role] || user.role || '';
+    document.getElementById('userRole').value = formRole;
+    
     document.getElementById('userPassword').value = ''; // Ne pas pré-remplir le mot de passe
+    document.getElementById('userPassword').required = false; // Make password optional when editing
+    
+    // Update submit button text
+    const submitBtn = document.querySelector('#userForm button[type="submit"]');
+    if (submitBtn) {
+        submitBtn.textContent = siteData.language === 'en' ? 'Update User' : 'Modifier l\'utilisateur';
+    }
+    
     updateRoleDescription();
     openModal('userModal');
 }
@@ -7529,28 +7794,28 @@ function previewCV(cvId) {
         `;
     }
     
-    document.getElementById('cvPreviewContent').innerHTML = `
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-bottom: 24px;">
-            <div>
+        document.getElementById('cvPreviewContent').innerHTML = `
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-bottom: 24px;">
+                <div>
                 <h3 style="color: var(--primary); font-weight: 800; margin-bottom: 20px; font-size: var(--font-size-2xl);">${cv.applicantName || (cv.applicantFirstName + ' ' + cv.applicantLastName) || 'Candidat'}</h3>
                 <p><strong>Email:</strong> ${cv.applicantEmail || cv.email || 'Non renseigné'}</p>
                 <p><strong>Téléphone:</strong> ${cv.applicantPhone || cv.phone || 'Non renseigné'}</p>
-                ${cv.applicantPosition ? `<p><strong>Poste actuel:</strong> ${cv.applicantPosition}</p>` : ''}
-                ${cv.expectedSalary ? `<p><strong>Salaire souhaité:</strong> ${cv.expectedSalary} DA</p>` : ''}
-            </div>
-            <div>
-                <p><strong>Poste:</strong> <span style="color: var(--primary); font-weight: 600;">${cv.jobTitle}</span></p>
+                    ${cv.applicantPosition ? `<p><strong>Poste actuel:</strong> ${cv.applicantPosition}</p>` : ''}
+                    ${cv.expectedSalary ? `<p><strong>Salaire souhaité:</strong> ${cv.expectedSalary} DA</p>` : ''}
+                </div>
+                <div>
+                    <p><strong>Poste:</strong> <span style="color: var(--primary); font-weight: 600;">${cv.jobTitle}</span></p>
                 <p><strong>Date:</strong> ${new Date(cv.appliedAt || cv.submittedAt).toLocaleDateString()}</p>
-                <p><strong>Statut:</strong> <span class="status-badge ${cv.processed ? 'status-processed' : 'status-pending'}">${cv.processed ? 'Traité' : 'En attente'}</span></p>
-                ${cv.processedBy ? `<p><strong>Traité par:</strong> ${cv.processedBy}</p>` : ''}
-                ${cv.currentlyEmployed ? `<p><strong>En poste:</strong> ${cv.currentlyEmployed === 'yes' ? 'Oui' : 'Non'}</p>` : ''}
-                ${cv.lastJobDate ? `<p><strong>Dernier poste:</strong> ${cv.lastJobDate}</p>` : ''}
-                ${cv.lastContractType ? `<p><strong>Type contrat:</strong> ${cv.lastContractType}</p>` : ''}
+                    <p><strong>Statut:</strong> <span class="status-badge ${cv.processed ? 'status-processed' : 'status-pending'}">${cv.processed ? 'Traité' : 'En attente'}</span></p>
+                    ${cv.processedBy ? `<p><strong>Traité par:</strong> ${cv.processedBy}</p>` : ''}
+                    ${cv.currentlyEmployed ? `<p><strong>En poste:</strong> ${cv.currentlyEmployed === 'yes' ? 'Oui' : 'Non'}</p>` : ''}
+                    ${cv.lastJobDate ? `<p><strong>Dernier poste:</strong> ${cv.lastJobDate}</p>` : ''}
+                    ${cv.lastContractType ? `<p><strong>Type contrat:</strong> ${cv.lastContractType}</p>` : ''}
+                </div>
             </div>
-        </div>
         ${cvPreviewSection}
-    `;
-    openModal('cvPreviewModal');
+        `;
+        openModal('cvPreviewModal');
 }
 
 function contactApplicant(email) {
@@ -7666,14 +7931,14 @@ async function deleteApplication(cvId) {
         c.id === cvId || c.id == cvId || String(c.id) === String(cvId) || c.firebaseId === firebaseId
     );
     
-    if (cvIndex >= 0) {
-        siteData.cvDatabase.splice(cvIndex, 1);
-        if (saveSiteData()) {
-            renderAdminCvDatabase();
+        if (cvIndex >= 0) {
+            siteData.cvDatabase.splice(cvIndex, 1);
+            if (saveSiteData()) {
+                renderAdminCvDatabase();
             if (typeof renderRecruteurApplications === 'function') renderRecruteurApplications();
             if (typeof renderLecteurCvDatabase === 'function') renderLecteurCvDatabase();
             if (typeof populateCVJobFilter === 'function') populateCVJobFilter();
-            showNotification('Candidature supprimée', 'success');
+                showNotification('Candidature supprimée', 'success');
             logActivity(currentUser.username, `Candidature supprimée: ${cvName}`);
         }
     }
@@ -8063,8 +8328,8 @@ function executeRecruteurScript() {
             setupRecruteurInteractions();
         });
     } else {
-        renderRecruteurContent();
-        setupRecruteurInteractions();
+    renderRecruteurContent();
+    setupRecruteurInteractions();
     }
 }
 
@@ -8403,8 +8668,8 @@ function renderRecruteurApplications() {
             if (totalPages > 1 && itemsPerPage !== allFiltered.length) {
                 paginationBottom.innerHTML = `
                     <button class="btn btn-sm btn-outline functional-btn" onclick="changeRecruteurPage(${currentPage - 1})" ${currentPage === 1 ? 'disabled style="opacity: 0.5; cursor: not-allowed;"' : ''}>
-                        <i class="fas fa-chevron-left"></i> Précédent
-                    </button>
+                    <i class="fas fa-chevron-left"></i> Précédent
+                </button>
                     <span style="margin: 0 16px; font-weight: 600; color: var(--text);">
                         Page ${currentPage} / ${totalPages} 
                         <span style="color: var(--text-light); font-size: var(--font-size-sm);">
@@ -8412,9 +8677,9 @@ function renderRecruteurApplications() {
                         </span>
                     </span>
                     <button class="btn btn-sm btn-outline functional-btn" onclick="changeRecruteurPage(${currentPage + 1})" ${currentPage === totalPages ? 'disabled style="opacity: 0.5; cursor: not-allowed;"' : ''}>
-                        Suivant <i class="fas fa-chevron-right"></i>
-                    </button>
-                `;
+                    Suivant <i class="fas fa-chevron-right"></i>
+                </button>
+            `;
                 paginationBottom.style.display = 'flex';
             } else {
                 paginationBottom.innerHTML = `
@@ -9815,7 +10080,44 @@ function applyCustomSettings() {
     
     // Appliquer le slogan personnalisé
     if (siteData.settings.slogan) {
-        document.getElementById('heroSubtitle').textContent = siteData.settings.slogan;
+                const heroSubtitle = document.getElementById('heroSubtitle');
+                if (heroSubtitle) {
+                    heroSubtitle.textContent = siteData.settings.slogan;
+                }
+            }
+            
+            // Appliquer les tailles de police sauvegardées
+            if (siteData.heroSizes) {
+                const heroTitle = document.getElementById('heroTitle');
+                const heroSubtitle = document.getElementById('heroSubtitle');
+                
+                if (siteData.heroSizes.title && heroTitle) {
+                    heroTitle.style.fontSize = siteData.heroSizes.title + 'px';
+                }
+                
+                if (siteData.heroSizes.subtitle && heroSubtitle) {
+                    heroSubtitle.style.fontSize = siteData.heroSizes.subtitle + 'px';
+                }
+            }
+            
+            // Appliquer le formatage du titre sauvegardé
+            if (siteData.titleFormatting) {
+                const heroTitle = document.getElementById('heroTitle');
+                if (heroTitle) {
+                    heroTitle.style.fontWeight = siteData.titleFormatting.bold ? '900' : '800';
+                    heroTitle.style.fontStyle = siteData.titleFormatting.italic ? 'italic' : 'normal';
+                    heroTitle.style.textDecoration = siteData.titleFormatting.underline ? 'underline' : 'none';
+                }
+            }
+            
+            // Appliquer le formatage du sous-titre sauvegardé
+            if (siteData.subtitleFormatting) {
+                const heroSubtitle = document.getElementById('heroSubtitle');
+                if (heroSubtitle) {
+                    heroSubtitle.style.fontWeight = siteData.subtitleFormatting.bold ? '700' : '400';
+                    heroSubtitle.style.fontStyle = siteData.subtitleFormatting.italic ? 'italic' : 'normal';
+                    heroSubtitle.style.textDecoration = siteData.subtitleFormatting.underline ? 'underline' : 'none';
+                }
     }
     
     // Appliquer les fonds personnalisés
@@ -11524,9 +11826,9 @@ function openCVViewer(cvUrl, candidateName) {
                     <a href="${cvUrl}" download style="background: rgba(255,255,255,0.2); border: 1px solid rgba(255,255,255,0.3); color: white; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 14px; text-decoration: none;">
                         <i class="fas fa-download"></i> Télécharger
                     </a>
-                    <button onclick="this.closest('div').parentElement.parentElement.remove()" style="background: transparent; border: none; color: white; font-size: 24px; cursor: pointer;">
-                        <i class="fas fa-times"></i>
-                    </button>
+                <button onclick="this.closest('div').parentElement.parentElement.remove()" style="background: transparent; border: none; color: white; font-size: 24px; cursor: pointer;">
+                    <i class="fas fa-times"></i>
+                </button>
                 </div>
             </div>
             <div style="flex: 1; overflow: auto; padding: 20px;">

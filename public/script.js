@@ -8,8 +8,8 @@ const APP_MODE = 'FIREBASE'; // 'LOCAL' ou 'FIREBASE'
 
 // Configuration Cloudflare R2 (pour upload CV)
 const R2_CONFIG = {
-workerUrl: 'https://upload-ae2i.ae2ialgerie2025.workers.dev',
-publicUrl: 'https://pub-298ee83d49284d7cc8b8c2eac280bf44.r2.dev/ae2i-cvs-algerie'
+    workerUrl: 'https://upload-ae2i.ae2ialgerie2025.workers.dev',
+    publicUrl: 'https://pub-f4fd5f0dedd24600b104dee9aec15539.r2.dev'
 };
 
 // Mapping explicite email -> rôle (secours si Firestore est indisponible/incomplet)
@@ -90,11 +90,11 @@ async function hydrateUserFromFirestore(fbUser) {
 // Ensure user document exists in Firestore with correct role (for security rules)
 async function ensureUserDocumentInFirestore(uid, email, role) {
     if (!window.firebaseHelper || !uid) return;
-    
+
     try {
         // Check if user document exists
         const userDoc = await window.firebaseHelper.getDocument('users', uid);
-        
+
         if (!userDoc.success || !userDoc.data) {
             // Create user document if it doesn't exist
             console.log('📝 [USER DOC] Creating user document in Firestore:', { uid, email, role });
@@ -104,7 +104,7 @@ async function ensureUserDocumentInFirestore(uid, email, role) {
                 createdAt: new Date().toISOString(),
                 updatedAt: new Date().toISOString()
             }, false); // false = don't merge, create new
-            
+
             if (result.success) {
                 console.log('✅ [USER DOC] User document created successfully');
             } else {
@@ -119,7 +119,7 @@ async function ensureUserDocumentInFirestore(uid, email, role) {
                     role: role,
                     updatedAt: new Date().toISOString()
                 });
-                
+
                 if (result.success) {
                     console.log('✅ [USER DOC] User role updated successfully');
                 } else {
@@ -139,174 +139,143 @@ async function ensureUserDocumentInFirestore(uid, email, role) {
 /* 🔥 FIX SUPRÊME : Utiliser Firebase Authentication comme source VRAIE de currentUser */
 
 function listenFirebaseAuth() {
-if (APP_MODE !== "FIREBASE") return;
+    if (APP_MODE !== "FIREBASE") return;
 
-const auth = window.firebaseServices?.auth;
-if (!auth) {
-console.error("❌ Firebase Auth introuvable !");
-return;
-}
+    const auth = window.firebaseServices?.auth;
+    if (!auth) {
+        console.error("❌ Firebase Auth introuvable !");
+        return;
+    }
 
-auth.onAuthStateChanged(async (fbUser) => {
-console.log("🔄 [AUTH] Firebase Auth changed:", fbUser);
+    auth.onAuthStateChanged(async (fbUser) => {
+        console.log("🔄 [AUTH] Firebase Auth changed:", fbUser);
 
-if (!fbUser) {
-    console.log("👤 [AUTH] Aucun utilisateur connecté → currentUser = guest");
-    window.currentUser = { username: "guest", role: "guest", isLoggedIn: false };
-    updateLoginStatus();
-    return;
-}
+        if (!fbUser) {
+            console.log("👤 [AUTH] Aucun utilisateur connecté → currentUser = guest");
+            window.currentUser = { username: "guest", role: "guest", isLoggedIn: false };
+            updateLoginStatus();
+            return;
+        }
 
-console.log("🔐 [AUTH] Firebase user connecté:", fbUser.email);
+        console.log("🔐 [AUTH] Firebase user connecté:", fbUser.email);
 
-// Charger le rôle depuis Firestore (UID puis fallback email)
-window.currentUser = await hydrateUserFromFirestore(fbUser);
+        // Charger le rôle depuis Firestore (UID puis fallback email)
+        window.currentUser = await hydrateUserFromFirestore(fbUser);
 
-console.log("🟩 [AUTH] currentUser mis à jour depuis Firestore:", window.currentUser);
+        console.log("🟩 [AUTH] currentUser mis à jour depuis Firestore:", window.currentUser);
 
-// mettre à jour l'UI
-updateLoginStatus();
-updateLoginButton();
-});
+        // mettre à jour l'UI
+        updateLoginStatus();
+        updateLoginButton();
+    });
 }
 
 /* === INITIALISATION FIREBASE === */
 function initializeFirebase() {
-console.log("🔥 VERSION SCRIPT = 7.1");
-console.log('🔥 === INITIALISATION FIREBASE ===');
-console.log('APP_MODE:', APP_MODE);
-console.log('Firebase helper disponible?', typeof window.firebaseHelper !== 'undefined');
+    console.log("🔥 VERSION SCRIPT = 7.1");
+    console.log('🔥 === INITIALISATION FIREBASE ===');
+    console.log('APP_MODE:', APP_MODE);
+    console.log('Firebase helper disponible?', typeof window.firebaseHelper !== 'undefined');
 
-if (APP_MODE !== 'FIREBASE') {
-console.log('⚠️ Mode LOCAL - Firebase non initialisé');
-return;
-}
+    if (APP_MODE !== 'FIREBASE') {
+        console.log('⚠️ Mode LOCAL - Firebase non initialisé');
+        return;
+    }
 
-if (typeof window.firebaseHelper === 'undefined') {
-console.error('❌ Firebase helper non trouvé!');
-console.log('Vérifiez que firebase.js est chargé avant script.js');
-return;
-}
+    if (typeof window.firebaseHelper === 'undefined') {
+        console.error('❌ Firebase helper non trouvé!');
+        console.log('Vérifiez que firebase.js est chargé avant script.js');
+        return;
+    }
 
-console.log('✅ Firebase helper disponible');
-console.log('🔥 Services Firebase:', window.firebaseServices ? 'disponibles' : 'indisponibles');
+    console.log('✅ Firebase helper disponible');
+    console.log('🔥 Services Firebase:', window.firebaseServices ? 'disponibles' : 'indisponibles');
 
-// Test de connexion simple
-testFirebaseConnection();
+    // Test de connexion simple
+    // testFirebaseConnection();
 
-listenFirebaseAuth();
+    listenFirebaseAuth();
 
 }
 
 /* === FONCTION DE TEST FIREBASE === */
 async function testFirebaseConnection() {
-console.log('🧪 testFirebaseConnection appelée');
-
-if (typeof window.firebaseHelper === 'undefined') {
-console.error('❌ Firebase helper non trouvé!');
-return;
-}
-
-console.log('✅ Firebase helper trouvé');
-console.log('submitCV existe?', typeof window.firebaseHelper.submitCV);
-
-try {
-// Test simple avec un faux fichier
-const testContent = "Test CV Firebase";
-const blob = new Blob([testContent], { type: 'text/plain' });
-const testFile = new File([blob], "test_firebase.txt", { type: 'text/plain' });
-
-const testData = {
-    fullName: "Test User Firebase",
-    email: "test_firebase@example.com",
-    phone: "0123456789",
-    position: "Test Position Firebase"
-};
-
-console.log('🚀 Appel submitCV de FirebaseHelper...');
-const result = await window.firebaseHelper.submitCV(testData, testFile);
-console.log('📦 Résultat submitCV:', result);
-
-return result;
-
-} catch (error) {
-console.error('❌ Erreur test Firebase:', error);
-return { success: false, error: error.message };
-}
+    console.log('🧪 testFirebaseConnection DISABLED');
+    return { success: true, message: "Disabled to prevent auto-uploads" };
 }
 /* 🔥 FIX GLOBAL : Restaurer la session AVANT TOUT */
 
 (function restoreUserEarly() {
-try {
-// Vérifier le flag de logout AVANT de restaurer la session
-const loggedOutFlag = localStorage.getItem('ae2i_logged_out');
-if (loggedOutFlag === 'true') {
-    console.log("⏸️ [EARLY RESTORE] Flag de logout détecté, skip restauration session");
-    window.currentUser = { username: "guest", role: "guest", isLoggedIn: false };
-    return;
-}
+    try {
+        // Vérifier le flag de logout AVANT de restaurer la session
+        const loggedOutFlag = localStorage.getItem('ae2i_logged_out');
+        if (loggedOutFlag === 'true') {
+            console.log("⏸️ [EARLY RESTORE] Flag de logout détecté, skip restauration session");
+            window.currentUser = { username: "guest", role: "guest", isLoggedIn: false };
+            return;
+        }
 
-const saved = localStorage.getItem("ae2i_current_user");
-console.log("🟦 EARLY RESTORE: saved session =", saved);
+        const saved = localStorage.getItem("ae2i_current_user");
+        console.log("🟦 EARLY RESTORE: saved session =", saved);
 
-if (saved) {
-    const parsed = JSON.parse(saved);
-    if (parsed && parsed.isLoggedIn) {
-        console.log("🟩 EARLY RESTORE: Session restaurée AVANT INITS:", parsed);
-        window.currentUser = parsed;
-    } else {
-        console.log("🟨 EARLY RESTORE: Session trouvée mais user non-connecté");
+        if (saved) {
+            const parsed = JSON.parse(saved);
+            if (parsed && parsed.isLoggedIn) {
+                console.log("🟩 EARLY RESTORE: Session restaurée AVANT INITS:", parsed);
+                window.currentUser = parsed;
+            } else {
+                console.log("🟨 EARLY RESTORE: Session trouvée mais user non-connecté");
+            }
+        } else {
+            console.log("🟥 EARLY RESTORE: Aucun savedUser trouvé");
+        }
+
+    } catch (e) {
+        console.error("❌ EARLY RESTORE ERROR:", e);
     }
-} else {
-    console.log("🟥 EARLY RESTORE: Aucun savedUser trouvé");
-}
-
-} catch (e) {
-console.error("❌ EARLY RESTORE ERROR:", e);
-}
 })();
 
 /* === FONCTION UPLOAD VERS R2 === */
 async function uploadCVToR2(cvFile, applicantName, jobTitle) {
-console.log('📤 uploadCVToR2 appelée');
+    console.log('📤 uploadCVToR2 appelée');
 
-try {
-const formData = new FormData();
-const timestamp = Date.now();
-const safeFileName = cvFile.name.replace(/[^a-zA-Z0-9.-]/g, '_');
-const path = `cvs/${timestamp}_${safeFileName}`;
+    try {
+        const formData = new FormData();
+        const timestamp = Date.now();
+        const safeFileName = cvFile.name.replace(/[^a-zA-Z0-9.-]/g, '_');
+        const path = `cvs/${timestamp}_${safeFileName}`;
 
-formData.append('file', cvFile);
-formData.append('path', path);
+        formData.append('file', cvFile);
+        formData.append('path', path);
 
-console.log('📤 Upload vers:', R2_CONFIG.workerUrl + '/upload');
+        console.log('📤 Upload vers:', R2_CONFIG.workerUrl + '/upload');
 
-const response = await fetch(R2_CONFIG.workerUrl + '/upload', {
-    method: 'POST',
-    body: formData
-});
+        const response = await fetch(R2_CONFIG.workerUrl + '/upload', {
+            method: 'POST',
+            body: formData
+        });
 
-if (!response.ok) {
-    throw new Error(`Upload failed: ${response.status} ${response.statusText}`);
-}
+        if (!response.ok) {
+            throw new Error(`Upload failed: ${response.status} ${response.statusText}`);
+        }
 
-const result = await response.json();
+        const result = await response.json();
 
-console.log('✅ Upload R2 réussi:', result);
-return {
-    success: true,
-    url: result.url,
-    path: result.path,
-    fileName: cvFile.name
-};
+        console.log('✅ Upload R2 réussi:', result);
+        return {
+            success: true,
+            url: result.url,
+            path: result.path,
+            fileName: cvFile.name
+        };
 
-} catch (error) {
-console.error('❌ Upload R2 échoué:', error);
-return {
-    success: false,
-    error: error.message
-};
-}
+    } catch (error) {
+        console.error('❌ Upload R2 échoué:', error);
+        return {
+            success: false,
+            error: error.message
+        };
+    }
 }
 
 /* === EXPOSITION GLOBALE IMMÉDIATE === */
@@ -320,9 +289,9 @@ console.log('- testFirebaseConnection:', typeof testFirebaseConnection);
 console.log('- window.testFirebaseConnection:', typeof window.testFirebaseConnection);
 
 // Appeler l'initialisation au chargement
-document.addEventListener('DOMContentLoaded', function() {
-console.log('📄 DOM chargé - Initialisation...');
-initializeFirebase();
+document.addEventListener('DOMContentLoaded', function () {
+    console.log('📄 DOM chargé - Initialisation...');
+    initializeFirebase();
 });
 
 /* SECTION: VARIABLES GLOBALES */
@@ -405,7 +374,7 @@ let siteData = {
             id: 1,
             icon: '⚙️',
             title: { fr: 'Ingénierie de Projets', en: 'Project Engineering' },
-            description: { 
+            description: {
                 fr: 'Nous vous accompagnons dans la réalisation de vos projets nationaux et internationaux. Nos missions s\'étendent à l\'ensemble des métiers de l\'ingénierie.',
                 en: 'We support you in the implementation of your national and international projects. Our missions extend to all engineering professions.'
             },
@@ -416,7 +385,7 @@ let siteData = {
             id: 2,
             icon: '🏗️',
             title: { fr: 'Ingénierie d\'Installation', en: 'Installation Engineering' },
-            description: { 
+            description: {
                 fr: 'Conception et supervision d\'installations électriques pour projets industriels complexes.',
                 en: 'Design and supervision of electrical installations for complex industrial projects.'
             },
@@ -657,7 +626,7 @@ let siteData = {
             position: { fr: 'Directeur Technique, Sonatrach', en: 'Technical Director, Sonatrach' },
             avatar: 'backend/uploads/photos/logo_ae2i.png',
             rating: 5,
-            text: { 
+            text: {
                 fr: 'L\'équipe AE2I a su s\'adapter à nos contraintes spécifiques et proposer des solutions innovantes.',
                 en: 'The AE2I team adapted to our specific constraints and proposed innovative solutions.'
             },
@@ -669,7 +638,7 @@ let siteData = {
             position: { fr: 'Responsable Projet, TotalEnergies', en: 'Project Manager, TotalEnergies' },
             avatar: 'backend/uploads/photos/logo_ae2i.png',
             rating: 5,
-            text: { 
+            text: {
                 fr: 'Professionnalisme et expertise technique de premier plan. AE2I a livré notre projet dans les délais.',
                 en: 'Top-tier professionalism and technical expertise. AE2I delivered our project on time.'
             },
@@ -681,7 +650,7 @@ let siteData = {
             position: { fr: 'Ingénieur Principal, Schneider Electric', en: 'Principal Engineer, Schneider Electric' },
             avatar: 'backend/uploads/photos/logo_ae2i.png',
             rating: 5,
-            text: { 
+            text: {
                 fr: 'Une collaboration exceptionnelle avec des résultats dépassant nos attentes.',
                 en: 'Exceptional collaboration with results exceeding our expectations.'
             },
@@ -714,11 +683,11 @@ let siteData = {
             type: 'cdi',
             title: { fr: 'Chef de Projet Industriel', en: 'Industrial Project Manager' },
             location: 'Alger, Algérie',
-            description: { 
+            description: {
                 fr: 'Pilotez des projets industriels complexes de A à Z. Coordonnez les équipes techniques multidisciplinaires et assurez le respect des délais, budgets et exigences qualité dans un environnement international.',
                 en: 'Lead complex industrial projects from A to Z. Coordinate multidisciplinary technical teams and ensure compliance with deadlines, budgets and quality requirements in an international environment.'
             },
-            requirements: { 
+            requirements: {
                 fr: 'Master en ingénierie industrielle, 7+ années d\'expérience en gestion de projet, certification PMP obligatoire, maîtrise de l\'anglais et de l\'arabe, expérience internationale souhaitée.',
                 en: 'Master in industrial engineering, 7+ years of project management experience, PMP certification required, proficiency in English and Arabic, international experience desired.'
             },
@@ -733,11 +702,11 @@ let siteData = {
             type: 'stage',
             title: { fr: 'Stage Ingénieur Automatisation', en: 'Automation Engineer Internship' },
             location: 'Alger, Algérie',
-            description: { 
+            description: {
                 fr: 'Stage de 6 mois dans notre équipe automatisation. Participez à des projets réels de programmation d\'automates et de supervision industrielle. Développez vos compétences techniques dans un environnement professionnel stimulant.',
                 en: '6-month internship in our automation team. Participate in real PLC programming and industrial supervision projects. Develop your technical skills in a stimulating professional environment.'
             },
-            requirements: { 
+            requirements: {
                 fr: 'Étudiant en 5ème année ingénierie automatique/électronique, bases en programmation automates (Siemens, Schneider), motivation et curiosité technique, stage de fin d\'études.',
                 en: 'Student in 5th year automation/electronics engineering, basics in PLC programming (Siemens, Schneider), motivation and technical curiosity, final year internship.'
             },
@@ -893,101 +862,101 @@ const roleDescriptions = {
 
 // Fonction pour uploader le CV vers Cloudflare R2
 async function uploadCVToR2(cvFile, applicantName, jobTitle) {
-try {
-console.log('📤 [R2] Uploading CV to Cloudflare R2...');
+    try {
+        console.log('📤 [R2] Uploading CV to Cloudflare R2...');
 
-const formData = new FormData();
-const timestamp = Date.now();
-const safeFileName = cvFile.name.replace(/[^a-zA-Z0-9.-]/g, '_');
-const path = `cvs/${timestamp}_${safeFileName}`;
+        const formData = new FormData();
+        const timestamp = Date.now();
+        const safeFileName = cvFile.name.replace(/[^a-zA-Z0-9.-]/g, '_');
+        const path = `cvs/${timestamp}_${safeFileName}`;
 
-formData.append('file', cvFile);
-formData.append('path', path);
+        formData.append('file', cvFile);
+        formData.append('path', path);
 
-// Upload via Worker Cloudflare
-const response = await fetch(R2_CONFIG.workerUrl + '/upload', {
-    method: 'POST',
-    body: formData
-});
-if (!response.ok) {
-    throw new Error(`Upload failed: ${response.status}`);
-}
+        // Upload via Worker Cloudflare
+        const response = await fetch(R2_CONFIG.workerUrl + '/upload', {
+            method: 'POST',
+            body: formData
+        });
+        if (!response.ok) {
+            throw new Error(`Upload failed: ${response.status}`);
+        }
 
-const result = await response.json();
+        const result = await response.json();
 
-if (!result.success) {
-    throw new Error(result.error);
-}
+        if (!result.success) {
+            throw new Error(result.error);
+        }
 
-console.log('✅ [R2] CV uploaded successfully:', result.url);
+        console.log('✅ [R2] CV uploaded successfully:', result.url);
 
-return {
-    success: true,
-    url: result.url,
-    path: result.path,
-    fileName: cvFile.name
-};
+        return {
+            success: true,
+            url: result.url,
+            path: result.path,
+            fileName: cvFile.name
+        };
 
-} catch (error) {
-console.error('❌ [R2] Upload error:', error);
-return {
-    success: false,
-    error: error.message
-};
-}
+    } catch (error) {
+        console.error('❌ [R2] Upload error:', error);
+        return {
+            success: false,
+            error: error.message
+        };
+    }
 }
 
 // Fonction pour sauvegarder la candidature dans Firebase
 async function saveApplicationToFirebase(applicationData, cvUrl = null) {
-try {
-if (typeof window.firebaseHelper === 'undefined') {
-    throw new Error('Firebase not initialized');
-}
+    try {
+        if (typeof window.firebaseHelper === 'undefined') {
+            throw new Error('Firebase not initialized');
+        }
 
-console.log('🔥 [FIREBASE] Saving application...');
-console.log('🔥 [FIREBASE] Application data:', JSON.stringify(applicationData, null, 2));
+        console.log('🔥 [FIREBASE] Saving application...');
+        console.log('🔥 [FIREBASE] Application data:', JSON.stringify(applicationData, null, 2));
 
-// Extraire les informations CV avant de modifier l'objet
-const cvFileName = applicationData.applicantCV?.name || applicationData.cvFileName || 'unknown.pdf';
-const cvFileSize = applicationData.applicantCV?.size || applicationData.cvFileSize || 0;
-const cvFileType = applicationData.applicantCV?.type || applicationData.cvFileType || 'application/pdf';
+        // Extraire les informations CV avant de modifier l'objet
+        const cvFileName = applicationData.applicantCV?.name || applicationData.cvFileName || 'unknown.pdf';
+        const cvFileSize = applicationData.applicantCV?.size || applicationData.cvFileSize || 0;
+        const cvFileType = applicationData.applicantCV?.type || applicationData.cvFileType || 'application/pdf';
 
-// Préparer les données pour Firebase
-const firebaseApplication = {
-    ...applicationData,
-    cvUrl: cvUrl || null, // URL R2 si disponible
-    cvFileName: cvFileName,
-    cvFileSize: cvFileSize,
-    cvFileType: cvFileType,
-    status: applicationData.status || 'new',
-    source: 'website_form',
-    submittedAt: applicationData.submittedAt || new Date().toISOString()
-};
+        // Préparer les données pour Firebase
+        const firebaseApplication = {
+            ...applicationData,
+            cvUrl: cvUrl || null, // URL R2 si disponible
+            cvFileName: cvFileName,
+            cvFileSize: cvFileSize,
+            cvFileType: cvFileType,
+            status: applicationData.status || 'new',
+            source: 'website_form',
+            submittedAt: applicationData.submittedAt || new Date().toISOString()
+        };
 
-// Supprimer le fichier CV de l'objet (ne pas stocker en base64)
-delete firebaseApplication.applicantCV;
-delete firebaseApplication.applicantCV?.content;
+        // Supprimer le fichier CV de l'objet (ne pas stocker en base64)
+        delete firebaseApplication.applicantCV;
+        delete firebaseApplication.applicantCV?.content;
 
-// Sauvegarder dans Firestore (collection cvDatabase pour correspondre au listener)
-const result = await window.firebaseHelper.addDocument('cvDatabase', firebaseApplication);
+        // Sauvegarder dans Firestore (collection cvDatabase pour correspondre au listener)
+        const result = await window.firebaseHelper.addDocument('cvDatabase', firebaseApplication);
 
-if (result.success) {
-    console.log('✅ [FIREBASE] Application saved with ID:', result.id);
-    return {
-        success: true,
-        firebaseId: result.id
-    };
-} else {
-    throw new Error(result.error);
-}
+        if (result.success) {
+            console.log('✅ [FIREBASE] Application saved with ID:', result.id);
+            return {
+                success: true,
+                firebaseId: result.id
+            };
+        } else {
+            throw new Error(result.error);
+        }
 
-} catch (error) {
-console.error('❌ [FIREBASE] Save error:', error);
-return {
-    success: false,
-    error: error.message
-};
-}
+    } catch (error) {
+        console.error('❌ [FIREBASE] Save error:', error);
+        return {
+            success: false,
+            error: error.message
+        };
+    }
 }
 
 // Système de notifications ultra-amélioré OPÉRATIONNEL avec sauvegarde forcée
@@ -1013,13 +982,13 @@ function showNotification(message, type = 'success', duration = 4000, actions = 
     const notification = document.createElement('div');
     notification.className = `notification ${type}`;
     notification.setAttribute('role', 'alert');
-    
+
     let icon = 'info-circle';
     if (type === 'success') icon = 'check-circle';
     else if (type === 'error') icon = 'times-circle';
     else if (type === 'warning') icon = 'exclamation-triangle';
     else if (type === 'candidate-alert') icon = 'user-plus';
-    
+
     notification.innerHTML = `
         <i class="fas fa-${icon}"></i> 
         <div style="flex-grow: 1;">
@@ -1028,11 +997,11 @@ function showNotification(message, type = 'success', duration = 4000, actions = 
         </div>
         <button class="notification-close functional-btn" onclick="this.parentElement.remove()">×</button>
     `;
-    
+
     container.appendChild(notification);
-    
+
     setTimeout(() => notification.classList.add('show'), 100);
-    
+
     setTimeout(() => {
         notification.classList.remove('show');
         setTimeout(() => {
@@ -1076,7 +1045,7 @@ function showCandidateNotification(candidateName, jobTitle, cvId) {
 // Système de consentement Loi 18-07
 function initConsentSystem() {
     const savedConsent = localStorage.getItem('ae2i_consent');
-    
+
     if (savedConsent) {
         consentStatus = JSON.parse(savedConsent);
         if (consentStatus.accepted) {
@@ -1100,7 +1069,7 @@ function handleConsentResponse(accepted) {
     };
 
     localStorage.setItem('ae2i_consent', JSON.stringify(consentStatus));
-    
+
     if (!siteData.consentLogs) siteData.consentLogs = [];
     siteData.consentLogs.push({
         id: Date.now(),
@@ -1110,11 +1079,11 @@ function handleConsentResponse(accepted) {
     });
 
     document.getElementById('consentBanner').classList.remove('show');
-    
-    const message = accepted ? 
-        (siteData.language === 'en' ? 'Consent recorded. Thank you for your trust.' : 'Consentement enregistré. Merci pour votre confiance.') : 
+
+    const message = accepted ?
+        (siteData.language === 'en' ? 'Consent recorded. Thank you for your trust.' : 'Consentement enregistré. Merci pour votre confiance.') :
         (siteData.language === 'en' ? 'Consent declined. Some features may be limited.' : 'Consentement refusé. Certaines fonctionnalités peuvent être limitées.');
-    
+
     showNotification(message, accepted ? 'success' : 'info');
     logActivity('visitor', `Consentement ${accepted ? 'accepté' : 'refusé'}`);
     forceSaveData();
@@ -1129,33 +1098,33 @@ function checkConsentRequired(action) {
 }
 /* === FONCTION VIEWRECRUTEURAPPLICATIONS === */
 function viewRecruteurApplications(jobId) {
-console.log('📋 [RECRUITER] Viewing applications for job ID:', jobId);
+    console.log('📋 [RECRUITER] Viewing applications for job ID:', jobId);
 
-if (!currentUser || (currentUser.role !== 'recruiter' && currentUser.role !== 'admin')) {
-showNotification('Accès non autorisé', 'error');
-return;
-}
+    if (!currentUser || (currentUser.role !== 'recruiter' && currentUser.role !== 'admin')) {
+        showNotification('Accès non autorisé', 'error');
+        return;
+    }
 
-// Trouver le job
-const job = siteData.jobs.find(j => j.id == jobId);
-if (!job) {
-showNotification('Offre non trouvée', 'error');
-return;
-}
+    // Trouver le job
+    const job = siteData.jobs.find(j => j.id == jobId);
+    if (!job) {
+        showNotification('Offre non trouvée', 'error');
+        return;
+    }
 
-// Filtrer les candidatures pour ce job
-const applications = siteData.cvDatabase.filter(cv => cv.jobId == jobId);
+    // Filtrer les candidatures pour ce job
+    const applications = siteData.cvDatabase.filter(cv => cv.jobId == jobId);
 
-console.log(`📊 ${applications.length} candidature(s) trouvée(s) pour "${job.title.fr}"`);
+    console.log(`📊 ${applications.length} candidature(s) trouvée(s) pour "${job.title.fr}"`);
 
-// Si pas de candidatures
-if (applications.length === 0) {
-showNotification(`Aucune candidature pour "${job.title.fr}"`, 'info');
-return;
-}
+    // Si pas de candidatures
+    if (applications.length === 0) {
+        showNotification(`Aucune candidature pour "${job.title.fr}"`, 'info');
+        return;
+    }
 
-// Créer le HTML pour afficher les candidatures
-let modalHTML = `
+    // Créer le HTML pour afficher les candidatures
+    let modalHTML = `
 <div class="applications-modal">
     <div class="modal-header" style="background: var(--primary); color: white; padding: 20px; border-radius: 12px 12px 0 0;">
         <h3 style="margin: 0;">
@@ -1188,14 +1157,14 @@ let modalHTML = `
         <div id="applicationsList">
 `;
 
-// Ajouter chaque candidature
-applications.forEach((app, index) => {
-const appliedDate = new Date(app.appliedAt).toLocaleDateString('fr-FR');
-const isProcessed = app.processed || false;
-const statusClass = isProcessed ? 'status-processed' : 'status-pending';
-const statusText = isProcessed ? 'Traité' : 'En attente';
+    // Ajouter chaque candidature
+    applications.forEach((app, index) => {
+        const appliedDate = new Date(app.appliedAt).toLocaleDateString('fr-FR');
+        const isProcessed = app.processed || false;
+        const statusClass = isProcessed ? 'status-processed' : 'status-pending';
+        const statusText = isProcessed ? 'Traité' : 'En attente';
 
-modalHTML += `
+        modalHTML += `
     <div class="application-card ${isProcessed ? 'processed' : 'pending'}" 
          style="border: 1px solid var(--border); border-radius: 8px; padding: 15px; margin-bottom: 15px; background: ${isProcessed ? 'var(--bg-alt)' : 'white'};">
         
@@ -1256,9 +1225,9 @@ modalHTML += `
         ` : ''}
     </div>
 `;
-});
+    });
 
-modalHTML += `
+    modalHTML += `
         </div>
     </div>
     
@@ -1270,17 +1239,17 @@ modalHTML += `
 </div>
 `;
 
-// Créer et afficher la modal
-const modalId = 'applicationsModal';
-const existingModal = document.getElementById(modalId);
-if (existingModal) {
-existingModal.remove();
-}
+    // Créer et afficher la modal
+    const modalId = 'applicationsModal';
+    const existingModal = document.getElementById(modalId);
+    if (existingModal) {
+        existingModal.remove();
+    }
 
-const modalDiv = document.createElement('div');
-modalDiv.id = modalId;
-modalDiv.className = 'modal';
-modalDiv.style.cssText = `
+    const modalDiv = document.createElement('div');
+    modalDiv.id = modalId;
+    modalDiv.className = 'modal';
+    modalDiv.style.cssText = `
 position: fixed;
 top: 0;
 left: 0;
@@ -1293,9 +1262,9 @@ justify-content: center;
 z-index: 10000;
 `;
 
-const modalContent = document.createElement('div');
-modalContent.className = 'modal-content';
-modalContent.style.cssText = `
+    const modalContent = document.createElement('div');
+    modalContent.className = 'modal-content';
+    modalContent.style.cssText = `
 background: white;
 width: 90%;
 max-width: 1000px;
@@ -1305,135 +1274,135 @@ overflow: hidden;
 box-shadow: 0 10px 30px rgba(0,0,0,0.3);
 `;
 
-modalContent.innerHTML = modalHTML;
-modalDiv.appendChild(modalContent);
-document.body.appendChild(modalDiv);
+    modalContent.innerHTML = modalHTML;
+    modalDiv.appendChild(modalContent);
+    document.body.appendChild(modalDiv);
 
-// Ajouter fonction de fermeture
-modalDiv.addEventListener('click', function(e) {
-if (e.target === modalDiv) {
-    modalDiv.remove();
-}
-});
+    // Ajouter fonction de fermeture
+    modalDiv.addEventListener('click', function (e) {
+        if (e.target === modalDiv) {
+            modalDiv.remove();
+        }
+    });
 
-// Log activity
-logActivity(currentUser.username, `Affiche candidatures pour ${job.title.fr} (${applications.length} candidatures)`);
+    // Log activity
+    logActivity(currentUser.username, `Affiche candidatures pour ${job.title.fr} (${applications.length} candidatures)`);
 
-return applications;
+    return applications;
 }
 
 /* === FONCTIONS AUXILIAIRES POUR LA MODAL === */
 
 function filterApplications(filterType) {
-const applicationsList = document.getElementById('applicationsList');
-if (!applicationsList) return;
+    const applicationsList = document.getElementById('applicationsList');
+    if (!applicationsList) return;
 
-const cards = applicationsList.querySelectorAll('.application-card');
-const now = new Date();
-const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    const cards = applicationsList.querySelectorAll('.application-card');
+    const now = new Date();
+    const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
 
-cards.forEach(card => {
-let show = true;
+    cards.forEach(card => {
+        let show = true;
 
-switch(filterType) {
-    case 'pending':
-        show = card.classList.contains('pending');
-        break;
-    case 'processed':
-        show = card.classList.contains('processed');
-        break;
-    case 'recent':
-        // Vérifier si la candidature date de moins de 7 jours
-        const dateText = card.querySelector('.fa-calendar')?.parentElement?.textContent;
-        if (dateText) {
-            const dateParts = dateText.match(/(\d{2})\/(\d{2})\/(\d{4})/);
-            if (dateParts) {
-                const appDate = new Date(`${dateParts[3]}-${dateParts[2]}-${dateParts[1]}`);
-                show = appDate > sevenDaysAgo;
-            }
+        switch (filterType) {
+            case 'pending':
+                show = card.classList.contains('pending');
+                break;
+            case 'processed':
+                show = card.classList.contains('processed');
+                break;
+            case 'recent':
+                // Vérifier si la candidature date de moins de 7 jours
+                const dateText = card.querySelector('.fa-calendar')?.parentElement?.textContent;
+                if (dateText) {
+                    const dateParts = dateText.match(/(\d{2})\/(\d{2})\/(\d{4})/);
+                    if (dateParts) {
+                        const appDate = new Date(`${dateParts[3]}-${dateParts[2]}-${dateParts[1]}`);
+                        show = appDate > sevenDaysAgo;
+                    }
+                }
+                break;
+            case 'all':
+            default:
+                show = true;
         }
-        break;
-    case 'all':
-    default:
-        show = true;
-}
 
-card.style.display = show ? 'block' : 'none';
-});
+        card.style.display = show ? 'block' : 'none';
+    });
 }
 
 function exportApplicationsToCSV(jobId) {
-const applications = siteData.cvDatabase.filter(cv => cv.jobId == jobId);
-const job = siteData.jobs.find(j => j.id == jobId);
+    const applications = siteData.cvDatabase.filter(cv => cv.jobId == jobId);
+    const job = siteData.jobs.find(j => j.id == jobId);
 
-if (applications.length === 0) {
-showNotification('Aucune candidature à exporter', 'warning');
-return;
-}
+    if (applications.length === 0) {
+        showNotification('Aucune candidature à exporter', 'warning');
+        return;
+    }
 
-let csv = 'Nom,Email,Téléphone,Poste actuel,Diplôme,Salaire souhaité,Expérience,Date,Statut\n';
+    let csv = 'Nom,Email,Téléphone,Poste actuel,Diplôme,Salaire souhaité,Expérience,Date,Statut\n';
 
-applications.forEach(app => {
-const row = [
-    `"${app.applicantName || ''}"`,
-    `"${app.applicantEmail || ''}"`,
-    `"${app.applicantPhone || ''}"`,
-    `"${app.applicantPosition || ''}"`,
-    `"${app.applicantDiploma || ''}"`,
-    `"${app.expectedSalary || ''}"`,
-    `"${app.yearsExperience || ''}"`,
-    `"${new Date(app.appliedAt).toLocaleDateString('fr-FR')}"`,
-    `"${app.processed ? 'Traité' : 'En attente'}"`
-].join(',');
+    applications.forEach(app => {
+        const row = [
+            `"${app.applicantName || ''}"`,
+            `"${app.applicantEmail || ''}"`,
+            `"${app.applicantPhone || ''}"`,
+            `"${app.applicantPosition || ''}"`,
+            `"${app.applicantDiploma || ''}"`,
+            `"${app.expectedSalary || ''}"`,
+            `"${app.yearsExperience || ''}"`,
+            `"${new Date(app.appliedAt).toLocaleDateString('fr-FR')}"`,
+            `"${app.processed ? 'Traité' : 'En attente'}"`
+        ].join(',');
 
-csv += row + '\n';
-});
+        csv += row + '\n';
+    });
 
-const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-const link = document.createElement('a');
-link.href = URL.createObjectURL(blob);
-link.download = `Candidatures_${job?.title.fr || 'Job'}_${new Date().toISOString().split('T')[0]}.csv`;
-link.click();
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `Candidatures_${job?.title.fr || 'Job'}_${new Date().toISOString().split('T')[0]}.csv`;
+    link.click();
 
-showNotification(`Export CSV réussi (${applications.length} candidatures)`, 'success');
-logActivity(currentUser.username, `Export CSV candidatures pour ${job?.title.fr || 'job'} (${applications.length} lignes)`);
+    showNotification(`Export CSV réussi (${applications.length} candidatures)`, 'success');
+    logActivity(currentUser.username, `Export CSV candidatures pour ${job?.title.fr || 'job'} (${applications.length} lignes)`);
 }
 
 function exportApplicationsToPDF(jobId) {
-const applications = siteData.cvDatabase.filter(cv => cv.jobId == jobId);
-const job = siteData.jobs.find(j => j.id == jobId);
+    const applications = siteData.cvDatabase.filter(cv => cv.jobId == jobId);
+    const job = siteData.jobs.find(j => j.id == jobId);
 
-if (applications.length === 0) {
-showNotification('Aucune candidature à exporter', 'warning');
-return;
-}
-// Simple export texte pour l'instant (vous pourriez intégrer jsPDF plus tard)
-let content = `Candidatures pour: ${job?.title.fr || 'Offre non spécifiée'}\n`;
-content += `Date d'export: ${new Date().toLocaleDateString('fr-FR')}\n`;
-content += `Nombre de candidatures: ${applications.length}\n\n`;
-content += '='.repeat(80) + '\n\n';
+    if (applications.length === 0) {
+        showNotification('Aucune candidature à exporter', 'warning');
+        return;
+    }
+    // Simple export texte pour l'instant (vous pourriez intégrer jsPDF plus tard)
+    let content = `Candidatures pour: ${job?.title.fr || 'Offre non spécifiée'}\n`;
+    content += `Date d'export: ${new Date().toLocaleDateString('fr-FR')}\n`;
+    content += `Nombre de candidatures: ${applications.length}\n\n`;
+    content += '='.repeat(80) + '\n\n';
 
-applications.forEach((app, index) => {
-content += `${index + 1}. ${app.applicantName || 'Non spécifié'}\n`;
-content += `   Email: ${app.applicantEmail || 'Non spécifié'}\n`;
-content += `   Téléphone: ${app.applicantPhone || 'Non spécifié'}\n`;
-content += `   Poste actuel: ${app.applicantPosition || 'Non spécifié'}\n`;
-content += `   Diplôme: ${app.applicantDiploma || 'Non spécifié'}\n`;
-content += `   Salaire souhaité: ${app.expectedSalary || 'Non spécifié'} DA\n`;
-content += `   Expérience: ${app.yearsExperience || 'Non spécifié'} ans\n`;
-content += `   Date: ${new Date(app.appliedAt).toLocaleDateString('fr-FR')}\n`;
-content += `   Statut: ${app.processed ? 'Traité' : 'En attente'}\n`;
-content += '-'.repeat(40) + '\n\n';
-});
+    applications.forEach((app, index) => {
+        content += `${index + 1}. ${app.applicantName || 'Non spécifié'}\n`;
+        content += `   Email: ${app.applicantEmail || 'Non spécifié'}\n`;
+        content += `   Téléphone: ${app.applicantPhone || 'Non spécifié'}\n`;
+        content += `   Poste actuel: ${app.applicantPosition || 'Non spécifié'}\n`;
+        content += `   Diplôme: ${app.applicantDiploma || 'Non spécifié'}\n`;
+        content += `   Salaire souhaité: ${app.expectedSalary || 'Non spécifié'} DA\n`;
+        content += `   Expérience: ${app.yearsExperience || 'Non spécifié'} ans\n`;
+        content += `   Date: ${new Date(app.appliedAt).toLocaleDateString('fr-FR')}\n`;
+        content += `   Statut: ${app.processed ? 'Traité' : 'En attente'}\n`;
+        content += '-'.repeat(40) + '\n\n';
+    });
 
-const blob = new Blob([content], { type: 'text/plain;charset=utf-8;' });
-const link = document.createElement('a');
-link.href = URL.createObjectURL(blob);
-link.download = `Candidatures_${job?.title.fr || 'Job'}_${new Date().toISOString().split('T')[0]}.txt`;
-link.click();
+    const blob = new Blob([content], { type: 'text/plain;charset=utf-8;' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `Candidatures_${job?.title.fr || 'Job'}_${new Date().toISOString().split('T')[0]}.txt`;
+    link.click();
 
-showNotification(`Export PDF réussi (${applications.length} candidatures)`, 'success');
-logActivity(currentUser.username, `Export PDF candidatures pour ${job?.title.fr || 'job'} (${applications.length} candidatures)`);
+    showNotification(`Export PDF réussi (${applications.length} candidatures)`, 'success');
+    logActivity(currentUser.username, `Export PDF candidatures pour ${job?.title.fr || 'job'} (${applications.length} candidatures)`);
 }
 
 
@@ -1450,7 +1419,7 @@ function saveConsentSettings() {
     };
 
     localStorage.setItem('ae2i_consent', JSON.stringify(consentStatus));
-    
+
     if (!siteData.consentLogs) siteData.consentLogs = [];
     siteData.consentLogs.push({
         id: Date.now(),
@@ -1468,7 +1437,7 @@ function saveConsentSettings() {
 // Système de navigation multipage
 function showPage(pageId, addToHistory = true) {
     console.log('🚀 [SHOW PAGE] START - pageId:', pageId, 'addToHistory:', addToHistory);
-    
+
     // S'assurer que currentUser est à jour avant d'afficher la page
     const savedSession = localStorage.getItem('ae2i_current_user');
     if (savedSession && (!currentUser || !currentUser.isLoggedIn || currentUser.role === 'guest')) {
@@ -1482,7 +1451,7 @@ function showPage(pageId, addToHistory = true) {
             console.warn('⚠️ [SHOW PAGE] Erreur parsing session:', e);
         }
     }
-    
+
     const roleLc = (currentUser?.role || '').toLowerCase();
     console.log('[PAGE] showPage called with', pageId, 'addToHistory=', addToHistory, 'role=', roleLc, 'currentUser:', JSON.stringify(currentUser));
 
@@ -1524,7 +1493,7 @@ function showPage(pageId, addToHistory = true) {
 
         triggerPageScript(pageId);
         console.log('[PAGE] Page script triggered');
-        
+
         // Show logout button for dashboard pages
         if (pageId === 'admin' || pageId === 'recruteur' || pageId === 'lecteur') {
             const logoutBtn = targetSection.querySelector('.btn-logout');
@@ -1607,7 +1576,7 @@ function checkPageAccess(pageId) {
             console.warn('⚠️ [ACCESS CHECK] Erreur parsing session:', e);
         }
     }
-    
+
     console.log('🔍 [ACCESS CHECK] Page:', pageId, 'currentUser:', JSON.stringify(currentUser));
     const roleLc = (currentUser?.role || '').toLowerCase();
 
@@ -1634,10 +1603,10 @@ function checkPageAccess(pageId) {
             console.log('❌ [ACCESS CHECK] Session localStorage:', localStorage.getItem('ae2i_current_user'));
             showNotification(siteData.language === 'en' ? 'Administrator access required' : 'Accès administrateur requis', 'error');
             // Ne pas appeler showPage('home') ici pour éviter la récursion
-        return false;
+            return false;
         }
     }
-    
+
     if (pageId === 'recruteur' && roleLc !== 'recruiter' && roleLc !== 'recruteur' && roleLc !== 'admin') {
         showNotification(siteData.language === 'en' ? 'Recruiter access required' : 'Accès recruteur requis', 'error');
         showPage('home');
@@ -1649,14 +1618,14 @@ function checkPageAccess(pageId) {
         showPage('home');
         return false;
     }
-    
+
     return true;
 }
 
 // Setup navigation globale
 function setupNavigation() {
     document.querySelectorAll('.nav-link').forEach(link => {
-        link.addEventListener('click', function(e) {
+        link.addEventListener('click', function (e) {
             e.preventDefault();
             const pageId = this.getAttribute('data-page');
             if (pageId) {
@@ -1665,7 +1634,7 @@ function setupNavigation() {
         });
     });
 
-    window.addEventListener('popstate', function(e) {
+    window.addEventListener('popstate', function (e) {
         if (e.state && e.state.page) {
             showPage(e.state.page, false);
         } else {
@@ -1688,19 +1657,19 @@ function routeToDashboard(role) {
     const r = (role || '').toLowerCase();
     console.log('[NAV] routeToDashboard role=', r, 'currentUser=', JSON.stringify(currentUser));
     try {
-    if (r === 'admin') {
+        if (r === 'admin') {
             console.log('[NAV] showPage(admin) - calling now...');
-        showPage('admin');
+            showPage('admin');
             console.log('[NAV] showPage(admin) - call completed');
-    } else if (r === 'recruteur' || r === 'recruiter') {
-        console.log('[NAV] showPage(recruteur)');
-        showPage('recruteur');
-    } else if (r === 'lecteur' || r === 'reader') {
-        console.log('[NAV] showPage(lecteur)');
-        showPage('lecteur');
-    } else {
-        console.log('[NAV] showPage(home) fallback');
-        showPage('home');
+        } else if (r === 'recruteur' || r === 'recruiter') {
+            console.log('[NAV] showPage(recruteur)');
+            showPage('recruteur');
+        } else if (r === 'lecteur' || r === 'reader') {
+            console.log('[NAV] showPage(lecteur)');
+            showPage('lecteur');
+        } else {
+            console.log('[NAV] showPage(home) fallback');
+            showPage('home');
         }
     } catch (error) {
         console.error('[NAV] ❌ Error in routeToDashboard:', error);
@@ -1719,7 +1688,7 @@ async function loginFirebase(email, password) {
         }
         // Use the helper (wraps signInWithEmailAndPassword)
         const userCredential = await window.firebaseHelper.login(email, password);
-    
+
         console.log("✅ Firebase Auth login réussi:", userCredential.user);
         // currentUser sera automatiquement mis à jour via onAuthStateChanged
         return userCredential.user;
@@ -1733,12 +1702,12 @@ async function loginFirebase(email, password) {
 async function logoutFirebase() {
     try {
         console.log('🔴 [LOGOUT FIREBASE] Déconnexion en cours...');
-        
+
         // Log activity before logout
         if (currentUser && currentUser.username && currentUser.username !== 'guest') {
             logActivity(currentUser.username, 'Déconnexion');
         }
-        
+
         // Sign out from Firebase
         const signOutFn = window.firebaseServices?.signOut;
         if (typeof signOutFn === 'function') {
@@ -1750,21 +1719,21 @@ async function logoutFirebase() {
             // Use FirebaseHelper logout
             await window.firebaseHelper.logout();
         }
-        
+
         // Clear user data
         window.currentUser = { username: "guest", role: "guest", isLoggedIn: false };
         localStorage.removeItem('ae2i_current_user');
         sessionStorage.clear();
-        
+
         // Set persistent logout flag to prevent session restoration on page reload
         localStorage.setItem('ae2i_logged_out', 'true');
         justLoggedOut = true;
-        
+
         // Clear the logout flag only when user successfully logs in again (not on timeout)
-        
+
         // Reset initial auth check flag
         isInitialAuthCheck = true;
-        
+
         // Close any open menus/dropdowns
         const userDropdown = document.getElementById('userDropdown');
         if (userDropdown) {
@@ -1774,24 +1743,24 @@ async function logoutFirebase() {
         const mobileMenuOverlay = document.getElementById('mobileMenuOverlay');
         if (mobileMenuPanel) mobileMenuPanel.classList.remove('show');
         if (mobileMenuOverlay) mobileMenuOverlay.classList.remove('show');
-        
+
         // Update UI
         updateLoginButton();
         updateLoginStatus();
-        
+
         // Route to home page
         showPage('home');
         window.scrollTo({ top: 0, behavior: 'smooth' });
-        
+
         // Show success notification
         const logoutMsg = siteData.language === 'en' ? 'Successfully logged out' : 'Déconnexion réussie';
         showNotification(logoutMsg, 'success');
-        
+
         console.log("✅ [LOGOUT FIREBASE] Utilisateur déconnecté avec succès");
     } catch (error) {
         console.error("❌ [LOGOUT FIREBASE] Erreur déconnexion:", error);
         showNotification("Erreur logout: " + error.message, "error", 5000);
-        
+
         // Even if Firebase logout fails, clear local state
         window.currentUser = { username: "guest", role: "guest", isLoggedIn: false };
         localStorage.removeItem('ae2i_current_user');
@@ -1822,7 +1791,7 @@ function listenFirebaseAuth() {
                 isInitialAuthCheck = false;
                 return;
             }
-            
+
             // Si aucune session Firebase mais une session locale existe, 
             // NE PAS restaurer pour Firestore (car règles nécessitent Firebase Auth)
             // Mais on peut garder pour l'UI et suggérer de se reconnecter
@@ -1888,17 +1857,17 @@ function listenFirebaseAuth() {
         if (mappedRole && window.currentUser.role !== mappedRole) {
             window.currentUser.role = mappedRole;
         }
-        
+
         // Ensure user document exists in Firestore with correct role (for permissions)
         await ensureUserDocumentInFirestore(fbUser.uid, fbUser.email, window.currentUser.role);
-        
+
         // Persister la session résolue
         localStorage.setItem('ae2i_current_user', JSON.stringify(window.currentUser));
 
         console.log("🟩 [AUTH] currentUser mis à jour depuis Firestore:", window.currentUser);
         updateLoginStatus();
         updateLoginButton();
-        
+
         // Router vers le dashboard uniquement si ce n'est pas le chargement initial
         // (pour éviter de router automatiquement au refresh de page)
         if (!isInitialAuthCheck) {
@@ -1940,13 +1909,13 @@ function setupLoginSystem() {
     const mobileDashboardBtn = document.getElementById('mobileDashboardBtn');
     const mobileLogoutBtn = document.getElementById('mobileLogoutBtn');
 
-    loginBtn.addEventListener('click', function(e) {
+    loginBtn.addEventListener('click', function (e) {
         e.stopPropagation();
-        
+
         // Vérifier l'état réel de connexion (vérifier aussi localStorage pour être sûr)
         const savedSession = localStorage.getItem('ae2i_current_user');
         let isActuallyLoggedIn = false;
-        
+
         if (currentUser && currentUser.isLoggedIn) {
             isActuallyLoggedIn = true;
         } else if (savedSession) {
@@ -1959,19 +1928,19 @@ function setupLoginSystem() {
                 // Ignore parse errors
             }
         }
-        
+
         // Vérifier aussi Firebase Auth
         const fbAuth = window.firebaseServices?.auth;
         const fbUser = fbAuth?.currentUser;
         if (fbUser) {
             isActuallyLoggedIn = true;
         }
-        
+
         if (isActuallyLoggedIn && !justLoggedOut) {
             // Si connecté, rediriger vers le dashboard approprié (pas déconnecter!)
             // S'assurer que currentUser est à jour avant de router
             let userRole = currentUser?.role;
-            
+
             // Si currentUser n'est pas à jour, essayer de le récupérer depuis localStorage ou Firebase
             if (!userRole || userRole === 'guest') {
                 if (savedSession) {
@@ -1986,16 +1955,16 @@ function setupLoginSystem() {
                         console.warn('Erreur parsing session:', e);
                     }
                 }
-                
+
                 // Si toujours pas de rôle, vérifier Firebase Auth
                 if ((!userRole || userRole === 'guest') && fbUser) {
                     console.log('🔄 [LOGIN BTN] Tentative récupération rôle depuis Firebase...');
                     // Ne pas bloquer, utiliser routeToDashboard qui gère ça
                 }
             }
-            
+
             console.log('🔍 [LOGIN BTN CLICK] Utilisateur connecté, redirection vers dashboard. Role:', userRole, 'currentUser:', JSON.stringify(currentUser));
-            
+
             // Utiliser routeToDashboard qui gère mieux la vérification du rôle
             if (userRole) {
                 routeToDashboard(userRole);
@@ -2008,7 +1977,7 @@ function setupLoginSystem() {
             // Si non connecté, afficher la modale de connexion
             console.log('🔓 [LOGIN BTN CLICK] Utilisateur non connecté, affichage modale');
             if (loginModal) {
-            loginModal.classList.add('show');
+                loginModal.classList.add('show');
                 setTimeout(() => {
                     const usernameInput = document.getElementById('loginUsername');
                     if (usernameInput) usernameInput.focus();
@@ -2019,26 +1988,26 @@ function setupLoginSystem() {
         }
     });
 
-    loginClose.addEventListener('click', function() {
+    loginClose.addEventListener('click', function () {
         loginModal.classList.remove('show');
     });
 
-    loginForm.addEventListener('submit', async function(e) {
+    loginForm.addEventListener('submit', async function (e) {
         e.preventDefault();
-    
+
         const email = document.getElementById('loginUsername').value; // email ou username
         const password = document.getElementById('loginPassword').value;
-    
+
         console.log('🔍 Tentative connexion Firebase:', email);
-    
+
         // 🔐 Login Firebase
         const fbUser = await loginFirebase(email, password);
-    
+
         if (!fbUser) {
             // Login échoué → message déjà géré dans loginFirebase
             return;
         }
-    
+
         // Attendre que currentUser soit mis à jour par listenFirebaseAuth
         // On attend un peu pour que hydrateUserFromFirestore se termine
         let attempts = 0;
@@ -2048,7 +2017,7 @@ function setupLoginSystem() {
             user = window.currentUser;
             attempts++;
         }
-    
+
         // Si toujours pas de rôle, utiliser hydrateUserFromFirestore directement
         if (!user || !user.role || user.role === 'guest') {
             console.log('⚠️ [LOGIN] currentUser pas encore hydraté, appel direct hydrateUserFromFirestore');
@@ -2060,41 +2029,41 @@ function setupLoginSystem() {
             window.currentUser = user;
             localStorage.setItem('ae2i_current_user', JSON.stringify(window.currentUser));
         }
-    
+
         console.log('✅ Utilisateur connecté via Firebase:', user);
-    
+
         // Mettre à jour l'UI
         updateLoginButton();
         updateLoginStatus();
-    
+
         loginModal.classList.remove('show');
         loginForm.reset();
-    
-        const welcomeMsg = siteData.language === 'en' ? 
+
+        const welcomeMsg = siteData.language === 'en' ?
             `Welcome, ${user.username || user.email}!` :
             `Bienvenue, ${user.username || user.email}!`;
-    
+
         showNotification(welcomeMsg, 'success');
-        
+
         // Clear logout flag when user successfully logs in
         localStorage.removeItem('ae2i_logged_out');
         justLoggedOut = false;
-        
+
         // Navigation directe vers le dashboard en fonction du rôle réellement résolu
         const role = (user?.role || 'lecteur').toLowerCase();
         logActivity(user.username || user.email, `Connexion réussie (rôle: ${role}) [modal submit]`);
-        
+
         // Marquer que ce n'est plus le chargement initial pour permettre le routing
         isInitialAuthCheck = false;
-        
+
         // Router vers le dashboard approprié
         console.log('🚀 [LOGIN SUBMIT] Routing to dashboard for role:', role);
         routeToDashboard(role);
         console.log('[LOGIN SUBMIT] After routing, currentUser=', JSON.stringify(window.currentUser));
     });
-    
 
-    adminPanelLink.addEventListener('click', function(e) {
+
+    adminPanelLink.addEventListener('click', function (e) {
         e.preventDefault();
         console.log('🔍 [CLICK] adminPanelLink cliqué - currentUser:', JSON.stringify(currentUser));
         if (currentUser.role === 'admin') {
@@ -2112,21 +2081,21 @@ function setupLoginSystem() {
         userDropdown.classList.remove('show');
     });
 
-    logoutLink.addEventListener('click', function(e) {
+    logoutLink.addEventListener('click', function (e) {
         e.preventDefault();
         logout();
     });
 
     /* FIX: logout-system - Event listeners pour les nouveaux boutons */
     if (headerLogoutBtn) {
-        headerLogoutBtn.addEventListener('click', function(e) {
+        headerLogoutBtn.addEventListener('click', function (e) {
             e.preventDefault();
             logoutUser();
         });
     }
 
     if (mobileDashboardBtn) {
-        mobileDashboardBtn.addEventListener('click', function(e) {
+        mobileDashboardBtn.addEventListener('click', function (e) {
             e.preventDefault();
             console.log('🔍 [MOBILE DASHBOARD] Clic détecté - currentUser:', JSON.stringify(currentUser));
             if (currentUser.role === 'admin') {
@@ -2145,13 +2114,13 @@ function setupLoginSystem() {
     }
 
     if (mobileLogoutBtn) {
-        mobileLogoutBtn.addEventListener('click', function(e) {
+        mobileLogoutBtn.addEventListener('click', function (e) {
             e.preventDefault();
             logoutUser();
         });
     }
 
-    document.addEventListener('click', function(e) {
+    document.addEventListener('click', function (e) {
         if (!loginBtn.contains(e.target) && !userDropdown.contains(e.target)) {
             userDropdown.classList.remove('show');
         }
@@ -2244,7 +2213,7 @@ function updateLoginStatus() {
 async function logout() {
     console.log('🔴 [LOGOUT] Fonction logout() appelée');
     if (currentUser && currentUser.username && currentUser.username !== 'guest') {
-    logActivity(currentUser.username, 'Déconnexion');
+        logActivity(currentUser.username, 'Déconnexion');
     }
 
     // Sign out from Firebase first
@@ -2376,8 +2345,8 @@ function setupConsentSystem() {
 // Theme toggle
 function setupThemeToggle() {
     const themeToggle = document.getElementById('themeToggle');
-    
-    themeToggle.addEventListener('click', function() {
+
+    themeToggle.addEventListener('click', function () {
         if (document.body.classList.contains('dark-mode')) {
             document.body.classList.remove('dark-mode');
             this.innerHTML = '<i class="fas fa-moon"></i>';
@@ -2401,7 +2370,7 @@ function setupThemeToggle() {
 // Setup language switching (FR/EN/AR)
 function setupLanguageSwitch() {
     document.querySelectorAll('.language-btn').forEach(btn => {
-        btn.addEventListener('click', function() {
+        btn.addEventListener('click', function () {
             const lang = this.getAttribute('data-lang');
 
             document.querySelectorAll('.language-btn').forEach(b => {
@@ -2430,9 +2399,9 @@ function updateLanguageContent(lang) {
     // Update elements with data attributes (support ar)
     document.querySelectorAll('[data-fr][data-en]').forEach(element => {
         if (element) { // Safety check
-        const text = element.getAttribute(`data-${lang}`);
-        if (text) {
-            element.textContent = text;
+            const text = element.getAttribute(`data-${lang}`);
+            if (text) {
+                element.textContent = text;
             }
         }
     });
@@ -2440,9 +2409,9 @@ function updateLanguageContent(lang) {
     // Also support elements with data-ar attribute
     document.querySelectorAll('[data-ar]').forEach(element => {
         if (element) { // Safety check
-        const text = element.getAttribute(`data-${lang}`);
-        if (text) {
-            element.textContent = text;
+            const text = element.getAttribute(`data-${lang}`);
+            if (text) {
+                element.textContent = text;
             }
         }
     });
@@ -2458,7 +2427,7 @@ function updateLanguageContent(lang) {
 }
 
 // Arabic Translations Dictionary (comprehensive)
-        const arTranslations = {
+const arTranslations = {
     "About": "من نحن",
     "Access your administration area": "ادخل إلى لوحة التحكم",
     "Accueil": "الرئيسية",
@@ -2544,8 +2513,8 @@ function setupScrollToTop() {
         console.warn('scrollToTop button missing, skipping setup.');
         return;
     }
-    
-    window.addEventListener('scroll', function() {
+
+    window.addEventListener('scroll', function () {
         if (window.pageYOffset > 300) {
             scrollToTopBtn.classList.add('show');
         } else {
@@ -2553,7 +2522,7 @@ function setupScrollToTop() {
         }
     });
 
-    scrollToTopBtn.addEventListener('click', function() {
+    scrollToTopBtn.addEventListener('click', function () {
         window.scrollTo({ top: 0, behavior: 'smooth' });
         logActivity(currentUser.username || 'visitor', 'Scroll vers le haut');
     });
@@ -2572,7 +2541,7 @@ function setupMobileMenu() {
     }
 
     // Toggle menu open
-    mobileToggle.addEventListener('click', function() {
+    mobileToggle.addEventListener('click', function () {
         mobileOverlay.classList.add('show');
         mobilePanel.classList.add('show');
         this.setAttribute('aria-expanded', 'true');
@@ -2609,7 +2578,7 @@ function openModal(modalId) {
     if (modal) {
         modal.classList.add('show');
         modal.setAttribute('aria-hidden', 'false');
-        
+
         const firstInput = modal.querySelector('input, textarea, select');
         if (firstInput) {
             setTimeout(() => firstInput.focus(), 300);
@@ -2622,7 +2591,7 @@ function closeModal(modalId) {
     if (modal) {
         modal.classList.remove('show');
         modal.setAttribute('aria-hidden', 'true');
-        
+
         const form = modal.querySelector('form');
         if (form) form.reset();
     }
@@ -2639,14 +2608,14 @@ function logActivity(username, action) {
         page: currentPage,
         userAgent: navigator.userAgent.substring(0, 100)
     };
-    
+
     if (!siteData.activityLog) siteData.activityLog = [];
     siteData.activityLog.unshift(logEntry);
-    
+
     if (siteData.activityLog.length > 500) {
         siteData.activityLog = siteData.activityLog.slice(0, 500);
     }
-    
+
     console.log(`[${new Date().toLocaleString()}] ${username}: ${action}`);
 }
 
@@ -2686,16 +2655,16 @@ async function getFirebaseAuthUser(maxWaitMs = 2000) {
         console.warn('⚠️ [AUTH HELPER] Firebase Auth not available');
         return null;
     }
-    
+
     let authUser = auth.currentUser;
-    
+
     // If currentUser is null, wait for auth state to restore (Firebase Auth persistence)
     if (!authUser) {
         console.log('⏳ [AUTH HELPER] Waiting for Firebase Auth state to restore...');
         const startTime = Date.now();
         const checkInterval = 100;
         const maxChecks = Math.floor(maxWaitMs / checkInterval);
-        
+
         for (let i = 0; i < maxChecks; i++) {
             await new Promise(resolve => setTimeout(resolve, checkInterval));
             authUser = auth.currentUser;
@@ -2704,26 +2673,26 @@ async function getFirebaseAuthUser(maxWaitMs = 2000) {
                 return authUser;
             }
         }
-        
+
         console.warn(`⚠️ [AUTH HELPER] Firebase Auth state not restored after ${maxWaitMs}ms`);
         console.warn('⚠️ [AUTH HELPER] Auth state:', {
             hasAuth: !!auth,
             currentUser: auth?.currentUser?.email || 'null'
         });
     }
-    
+
     return authUser;
 }
 
 // Helper function to save admin data to Firestore with debug logging and auto-authentication
 async function saveAdminDataToFirestore(collectionName, documentId, data, description = '') {
     console.log(`🔥 [ADMIN FIREBASE SAVE] ${description || `Saving to ${collectionName}/${documentId}`}`);
-    
+
     if (typeof APP_MODE !== 'undefined' && APP_MODE === 'FIREBASE' && typeof window.firebaseHelper !== 'undefined') {
         try {
             // Get Firebase Auth user, waiting for auth state if needed
             let authUser = await getFirebaseAuthUser(2000);
-            
+
             // If still not authenticated but locally authenticated as admin, try to authenticate
             if (!authUser && currentUser && (currentUser.isLoggedIn || currentUser.role === 'admin' || currentUser.role === 'administrator')) {
                 console.log('⚠️ [ADMIN FIREBASE SAVE] Not Firebase authenticated, attempting auto-login...');
@@ -2734,7 +2703,7 @@ async function saveAdminDataToFirestore(collectionName, documentId, data, descri
                     isLoggedIn: currentUser.isLoggedIn
                 });
                 const userEmail = currentUser.email || currentUser.username;
-                
+
                 // Try to find password from siteData.users
                 if (userEmail && siteData.users) {
                     console.log(`🔍 [ADMIN FIREBASE SAVE] Looking for user in siteData.users...`);
@@ -2767,7 +2736,7 @@ async function saveAdminDataToFirestore(collectionName, documentId, data, descri
                     console.warn(`⚠️ [ADMIN FIREBASE SAVE] Cannot find user email or siteData.users is not available`);
                 }
             }
-            
+
             if (!authUser) {
                 console.warn('⚠️ [ADMIN FIREBASE SAVE] Not authenticated with Firebase Auth - cannot save to Firestore');
                 console.warn('⚠️ [ADMIN FIREBASE SAVE] Current auth state:', {
@@ -2779,20 +2748,20 @@ async function saveAdminDataToFirestore(collectionName, documentId, data, descri
                 console.warn('⚠️ [ADMIN FIREBASE SAVE] User needs to log in through Firebase Auth to save');
                 return { success: false, error: 'Not authenticated' };
             }
-            
+
             const dataToSave = {
                 ...data,
                 lastUpdated: new Date().toISOString(),
                 updatedBy: currentUser?.email || currentUser?.username || 'system',
                 updatedByUid: authUser.uid
             };
-            
+
             console.log(`🔥 [ADMIN FIREBASE SAVE] Collection: ${collectionName}, Document: ${documentId}`);
             console.log(`🔥 [ADMIN FIREBASE SAVE] Data keys:`, Object.keys(dataToSave));
             console.log(`🔥 [ADMIN FIREBASE SAVE] Data size:`, JSON.stringify(dataToSave).length, 'bytes');
-            
+
             const result = await window.firebaseHelper.setDocument(collectionName, documentId, dataToSave, true);
-            
+
             if (result && result.success) {
                 console.log(`✅ [ADMIN FIREBASE SAVE] Successfully saved ${collectionName}/${documentId}`);
                 return { success: true };
@@ -2825,20 +2794,20 @@ async function forceSaveData() {
         ---------------------------- */
         // Ne pas restaurer la session si logout récent
         if (!justLoggedOut) {
-        try {
-            const savedSession = localStorage.getItem('ae2i_current_user');
+            try {
+                const savedSession = localStorage.getItem('ae2i_current_user');
 
-            if (savedSession) {
-                const parsed = JSON.parse(savedSession);
+                if (savedSession) {
+                    const parsed = JSON.parse(savedSession);
 
                     // Si la session sauvée est connectée mais currentUser == guest → NE PAS ÉCRASER (sauf après logout)
                     if (parsed.isLoggedIn && (!currentUser || !currentUser.isLoggedIn) && !justLoggedOut) {
-                    console.log("💾 [PATCH] Empêche écrasement — restauration utilisateur connecté.");
-                    currentUser = parsed;
+                        console.log("💾 [PATCH] Empêche écrasement — restauration utilisateur connecté.");
+                        currentUser = parsed;
+                    }
                 }
-            }
-        } catch (e) {
-            console.warn("⚠️ Erreur analyse session:", e);
+            } catch (e) {
+                console.warn("⚠️ Erreur analyse session:", e);
             }
         } else {
             console.log("⏸️ [SAVE] Logout récent détecté, skip restauration session");
@@ -2853,8 +2822,8 @@ async function forceSaveData() {
             if (justLoggedOut) {
                 localStorage.removeItem("ae2i_current_user");
                 console.log("💾 [SAVE] Logout récent → session supprimée de localStorage");
-        } else {
-            console.log("💾 [SAVE] Aucun user connecté → pas de remplacement.");
+            } else {
+                console.log("💾 [SAVE] Aucun user connecté → pas de remplacement.");
             }
         }
 
@@ -2909,11 +2878,11 @@ async function forceSaveData() {
             try {
                 console.log('🔥 [FIREBASE SAVE] Saving siteData to Firestore...');
                 console.log('🔥 [FIREBASE SAVE] Current user:', currentUser?.email || currentUser?.username || 'none');
-                
+
                 // Get Firebase Auth user, waiting for auth state if needed
                 const auth = window.firebaseServices?.auth;
                 let authUser = await getFirebaseAuthUser(2000);
-                
+
                 // If still not authenticated but locally authenticated as admin, try to authenticate
                 if (!authUser && currentUser && (currentUser.isLoggedIn || currentUser.role === 'admin' || currentUser.role === 'administrator')) {
                     console.log('⚠️ [FIREBASE SAVE] Not Firebase authenticated, attempting auto-login...');
@@ -2924,7 +2893,7 @@ async function forceSaveData() {
                         isLoggedIn: currentUser.isLoggedIn
                     });
                     const userEmail = currentUser.email || currentUser.username;
-                    
+
                     // Try to find password from siteData.users
                     if (userEmail && siteData.users) {
                         console.log(`🔍 [FIREBASE SAVE] Looking for user in siteData.users...`);
@@ -2957,9 +2926,9 @@ async function forceSaveData() {
                         console.warn(`⚠️ [FIREBASE SAVE] Cannot find user email or siteData.users is not available`);
                     }
                 }
-                
+
                 console.log('🔥 [FIREBASE SAVE] Is authenticated:', authUser ? 'yes' : 'no');
-                
+
                 if (!authUser) {
                     console.warn('⚠️ [FIREBASE SAVE] Not authenticated with Firebase Auth - cannot save to Firestore');
                     console.warn('⚠️ [FIREBASE SAVE] Current auth state:', {
@@ -2971,7 +2940,7 @@ async function forceSaveData() {
                     console.warn('⚠️ [FIREBASE SAVE] User needs to log in through Firebase Auth to save');
                     throw new Error('Not authenticated with Firebase Auth');
                 }
-                
+
                 // Save to Firestore in 'siteData' collection with document ID 'main'
                 const dataToSaveToFirebase = {
                     ...dataToSave,
@@ -2979,13 +2948,13 @@ async function forceSaveData() {
                     updatedBy: currentUser?.email || currentUser?.username || 'system',
                     updatedByUid: authUser.uid
                 };
-                
+
                 console.log('🔥 [FIREBASE SAVE] Data size:', JSON.stringify(dataToSaveToFirebase).length, 'bytes');
-                
+
                 const firebaseResult = await window.firebaseHelper.setDocument('siteData', 'main', dataToSaveToFirebase, true); // true = merge, update existing
-                
+
                 console.log('🔥 [FIREBASE SAVE] Firebase result:', firebaseResult);
-                
+
                 if (firebaseResult && firebaseResult.success) {
                     console.log('✅ [FIREBASE SAVE] Site data saved to Firestore successfully');
                     console.log('✅ [FIREBASE SAVE] Document ID: siteData/main');
@@ -3021,7 +2990,7 @@ async function forceSaveData() {
 
         console.log('✅ Données sauvegardées avec succès (vérifiées)');
         if (currentUser && currentUser.isLoggedIn && !justLoggedOut) {
-        console.log('✅ Session préservée après sauvegarde:', currentUser.username, currentUser.role);
+            console.log('✅ Session préservée après sauvegarde:', currentUser.username, currentUser.role);
         } else {
             console.log('✅ Aucune session active après sauvegarde');
         }
@@ -3058,51 +3027,51 @@ function saveSiteData() {
 
 async function loadSiteData() {
     /* 🔥 FIX : restaurer la session depuis localStorage */
-try {
-// Vérifier le flag de logout persistant AVANT de restaurer la session
-const loggedOutFlag = localStorage.getItem('ae2i_logged_out');
-if (loggedOutFlag === 'true') {
-    console.log("⏸️ [LOAD DATA] Flag de logout détecté, skip restauration session");
-    currentUser = { username: "guest", role: "guest", isLoggedIn: false };
-    return; // Ne pas restaurer la session si logout flag est présent
-}
+    try {
+        // Vérifier le flag de logout persistant AVANT de restaurer la session
+        const loggedOutFlag = localStorage.getItem('ae2i_logged_out');
+        if (loggedOutFlag === 'true') {
+            console.log("⏸️ [LOAD DATA] Flag de logout détecté, skip restauration session");
+            currentUser = { username: "guest", role: "guest", isLoggedIn: false };
+            return; // Ne pas restaurer la session si logout flag est présent
+        }
 
-// Ne pas restaurer la session si l'utilisateur vient de se déconnecter
-if (justLoggedOut) {
-    console.log("⏸️ [RESTORE] Logout récent détecté, skip restauration session");
-    return;
-}
+        // Ne pas restaurer la session si l'utilisateur vient de se déconnecter
+        if (justLoggedOut) {
+            console.log("⏸️ [RESTORE] Logout récent détecté, skip restauration session");
+            return;
+        }
 
-const savedUser = localStorage.getItem('ae2i_current_user');
+        const savedUser = localStorage.getItem('ae2i_current_user');
 
-if (savedUser) {
-const parsed = JSON.parse(savedUser);
+        if (savedUser) {
+            const parsed = JSON.parse(savedUser);
 
-if (parsed && parsed.isLoggedIn && !justLoggedOut) {
-    console.log("🔐 [RESTORE] Session restaurée depuis localStorage:", parsed);
-    currentUser = parsed; // <<< FIX PRINCIPAL
-} else {
-    console.log("ℹ️ [RESTORE] Session sauvegardée = guest ou invalide");
-}
-} else {
-console.log("ℹ️ [RESTORE] Aucun current_user trouvé");
-}
-} catch (e) {
-console.error("❌ [RESTORE] Erreur restauration session:", e);
-}
+            if (parsed && parsed.isLoggedIn && !justLoggedOut) {
+                console.log("🔐 [RESTORE] Session restaurée depuis localStorage:", parsed);
+                currentUser = parsed; // <<< FIX PRINCIPAL
+            } else {
+                console.log("ℹ️ [RESTORE] Session sauvegardée = guest ou invalide");
+            }
+        } else {
+            console.log("ℹ️ [RESTORE] Aucun current_user trouvé");
+        }
+    } catch (e) {
+        console.error("❌ [RESTORE] Erreur restauration session:", e);
+    }
     try {
         // Try loading from Firebase first if in Firebase mode
         let loadedData = null;
         let loadedFromFirebase = false;
-        
+
         if (typeof APP_MODE !== 'undefined' && APP_MODE === 'FIREBASE' && typeof window.firebaseHelper !== 'undefined') {
             try {
                 console.log('🔥 [LOAD] Attempting to load siteData from Firestore...');
                 console.log('🔥 [LOAD] Is authenticated:', window.firebaseServices?.auth?.currentUser ? 'yes' : 'no');
-                
+
                 const firebaseResult = await window.firebaseHelper.getDocument('siteData', 'main');
                 console.log('🔥 [LOAD] Firebase result:', firebaseResult);
-                
+
                 if (firebaseResult && firebaseResult.success && firebaseResult.data) {
                     loadedData = firebaseResult.data;
                     loadedFromFirebase = true;
@@ -3116,14 +3085,14 @@ console.error("❌ [RESTORE] Erreur restauration session:", e);
                         console.warn('⚠️ [LOAD] Firebase error:', firebaseResult.error);
                     }
                 }
-                
+
                 // Also load site settings separately from Firebase (for title and slogan)
                 try {
                     const settingsResult = await window.firebaseHelper.getDocument('settings', 'main');
                     if (settingsResult && settingsResult.success && settingsResult.data) {
                         const settingsData = settingsResult.data;
                         console.log('✅ [LOAD] Site settings loaded from Firestore');
-                        
+
                         // Merge settings into loadedData
                         if (!loadedData) {
                             loadedData = {};
@@ -3131,7 +3100,7 @@ console.error("❌ [RESTORE] Erreur restauration session:", e);
                         if (!loadedData.settings) {
                             loadedData.settings = {};
                         }
-                        
+
                         // Merge site settings (especially title and slogan)
                         if (settingsData.title) loadedData.settings.title = settingsData.title;
                         if (settingsData.slogan) loadedData.settings.slogan = settingsData.slogan;
@@ -3144,7 +3113,7 @@ console.error("❌ [RESTORE] Erreur restauration session:", e);
                                 }
                             }
                         });
-                        
+
                         console.log('✅ [LOAD] Site settings merged into siteData');
                     } else {
                         console.log('ℹ️ [LOAD] No settings found in Firestore');
@@ -3152,19 +3121,19 @@ console.error("❌ [RESTORE] Erreur restauration session:", e);
                 } catch (settingsError) {
                     console.warn('⚠️ [LOAD] Error loading settings from Firestore:', settingsError);
                 }
-                
+
                 // Also load hero settings separately from Firebase
                 try {
                     const heroSettingsResult = await window.firebaseHelper.getDocument('heroSettings', 'main');
                     if (heroSettingsResult && heroSettingsResult.success && heroSettingsResult.data) {
                         const heroData = heroSettingsResult.data;
                         console.log('✅ [LOAD] Hero settings loaded from Firestore');
-                        
+
                         // Merge hero settings into loadedData or siteData
                         if (!loadedData) {
                             loadedData = {};
                         }
-                        
+
                         // Merge hero settings
                         if (heroData.titleGradient) loadedData.titleGradient = heroData.titleGradient;
                         if (heroData.sloganGradient) loadedData.sloganGradient = heroData.sloganGradient;
@@ -3173,7 +3142,7 @@ console.error("❌ [RESTORE] Erreur restauration session:", e);
                         if (heroData.heroSizes) loadedData.heroSizes = heroData.heroSizes;
                         if (heroData.titleFormatting) loadedData.titleFormatting = heroData.titleFormatting;
                         if (heroData.subtitleFormatting) loadedData.subtitleFormatting = heroData.subtitleFormatting;
-                        
+
                         console.log('✅ [LOAD] Hero settings merged into siteData');
                     } else {
                         console.log('ℹ️ [LOAD] No heroSettings found in Firestore');
@@ -3187,11 +3156,11 @@ console.error("❌ [RESTORE] Erreur restauration session:", e);
                 console.log('ℹ️ [LOAD] Falling back to localStorage');
             }
         }
-        
+
         // Fallback to localStorage if Firebase didn't work or not in Firebase mode
         if (!loadedData) {
-        const savedData = localStorage.getItem('ae2i_site_data');
-        if (savedData) {
+            const savedData = localStorage.getItem('ae2i_site_data');
+            if (savedData) {
                 loadedData = JSON.parse(savedData);
                 console.log('💾 [LOAD] Site data loaded from localStorage');
             }
@@ -3201,7 +3170,7 @@ console.error("❌ [RESTORE] Erreur restauration session:", e);
             // Validation des données chargées
             if (loadedData && loadedData.settings) {
                 siteData = { ...siteData, ...loadedData };
-                
+
                 // Remove Firebase-specific fields before merging
                 delete siteData.lastUpdated;
                 delete siteData.updatedBy;
@@ -3238,18 +3207,18 @@ console.error("❌ [RESTORE] Erreur restauration session:", e);
                 // Restaurer la session utilisateur si elle existe (sauf après logout)
                 const loggedOutFlag = localStorage.getItem('ae2i_logged_out');
                 if (loggedOutFlag !== 'true' && !justLoggedOut) {
-                const savedSession = localStorage.getItem('ae2i_current_user');
-                if (savedSession) {
-                    try {
-                        const sessionData = JSON.parse(savedSession);
-                        if (sessionData && sessionData.isLoggedIn) {
-                            currentUser = sessionData;
-                            console.log('✅ Session restaurée:', currentUser.username, 'Role:', currentUser.role);
+                    const savedSession = localStorage.getItem('ae2i_current_user');
+                    if (savedSession) {
+                        try {
+                            const sessionData = JSON.parse(savedSession);
+                            if (sessionData && sessionData.isLoggedIn) {
+                                currentUser = sessionData;
+                                console.log('✅ Session restaurée:', currentUser.username, 'Role:', currentUser.role);
+                            }
+                        } catch (e) {
+                            console.error('❌ Erreur restauration session:', e);
+                            localStorage.removeItem('ae2i_current_user');
                         }
-                    } catch (e) {
-                        console.error('❌ Erreur restauration session:', e);
-                        localStorage.removeItem('ae2i_current_user');
-                    }
                     }
                 } else {
                     console.log('⏸️ [RESTORE] Logout détecté (flag ou récent), skip restauration session dans loadSiteData');
@@ -3287,7 +3256,7 @@ console.error("❌ [RESTORE] Erreur restauration session:", e);
                 forceSaveData(); // Restaurer dans localStorage
                 return true;
             }
-            
+
             // Tentative de récupération d'urgence
             const emergencyData = sessionStorage.getItem('ae2i_emergency_backup');
             if (emergencyData) {
@@ -3299,7 +3268,7 @@ console.error("❌ [RESTORE] Erreur restauration session:", e);
                 return true;
             }
         }
-        
+
         console.log('ℹ️ Aucune donnée sauvegardée trouvée - Utilisation des données par défaut');
         return false;
     } catch (error) {
@@ -3313,7 +3282,7 @@ console.error("❌ [RESTORE] Erreur restauration session:", e);
 function toggleMaintenanceMode() {
     const enabled = document.getElementById('maintenanceMode').checked;
     siteData.settings.maintenanceMode = enabled;
-    
+
     if (forceSaveData()) {
         if (enabled) {
             document.body.classList.add('maintenance-mode');
@@ -3379,7 +3348,7 @@ async function connectLinkedIn() {
             pathname = pathname;
         }
         LINKEDIN_CONFIG.redirectUri = window.location.origin + pathname;
-        
+
         // Only use worker's redirect_uri if it's explicitly set as a secret AND matches our origin
         // This prevents using the worker's URL by mistake
         if (config.redirect_uri && config.redirect_uri.startsWith(window.location.origin)) {
@@ -3391,7 +3360,7 @@ async function connectLinkedIn() {
                 console.warn('⚠️ [LINKEDIN] Worker returned redirect URI:', config.redirect_uri, '- but it doesn\'t match frontend origin, so ignoring it');
             }
         }
-        
+
         // Log redirect URI for debugging
         console.log('🔗 [LINKEDIN] Using redirect URI:', LINKEDIN_CONFIG.redirectUri);
         console.log('⚠️ [LINKEDIN] IMPORTANT: This redirect URI must match EXACTLY in your LinkedIn app settings!');
@@ -3401,7 +3370,7 @@ async function connectLinkedIn() {
         // Save redirect URI to localStorage so it persists after redirect
         localStorage.setItem('linkedin_debug_redirect_uri', LINKEDIN_CONFIG.redirectUri);
         localStorage.setItem('linkedin_debug_timestamp', new Date().toISOString());
-        
+
         // Also display it on the page so user can see it
         const debugInfo = document.createElement('div');
         debugInfo.id = 'linkedin-debug-info';
@@ -3412,7 +3381,7 @@ async function connectLinkedIn() {
             <small>This must match EXACTLY in your LinkedIn app settings!</small>
         `;
         document.body.appendChild(debugInfo);
-        
+
         // Remove debug info after 10 seconds
         setTimeout(() => {
             const info = document.getElementById('linkedin-debug-info');
@@ -3426,7 +3395,7 @@ async function connectLinkedIn() {
         authUrl.searchParams.append('redirect_uri', LINKEDIN_CONFIG.redirectUri);
         authUrl.searchParams.append('scope', LINKEDIN_CONFIG.scope);
         authUrl.searchParams.append('state', LINKEDIN_CONFIG.state);
-        
+
         // Log for debugging - check browser console to see what redirect URI is being used
         console.log('🔗 [LINKEDIN] Redirect URI being sent:', LINKEDIN_CONFIG.redirectUri);
         console.log('🔗 [LINKEDIN] Full auth URL:', authUrl.toString());
@@ -3437,8 +3406,8 @@ async function connectLinkedIn() {
 
         // Small delay to ensure logs are visible before redirect
         setTimeout(() => {
-        // Redirect to LinkedIn OAuth
-        window.location.href = authUrl.toString();
+            // Redirect to LinkedIn OAuth
+            window.location.href = authUrl.toString();
         }, 500);
     } catch (error) {
         console.error('LinkedIn connection error:', error);
@@ -3463,14 +3432,14 @@ function disconnectLinkedIn() {
 }
 async function handleLinkedInCallback() {
     console.log('🔗 [LINKEDIN CALLBACK] Starting callback handler...');
-    
+
     // Display saved redirect URI from localStorage
     const savedRedirectUri = localStorage.getItem('linkedin_debug_redirect_uri');
     const savedTimestamp = localStorage.getItem('linkedin_debug_timestamp');
     if (savedRedirectUri) {
         console.log('🔗 [LINKEDIN CALLBACK] Redirect URI used (from localStorage):', savedRedirectUri);
         console.log('🔗 [LINKEDIN CALLBACK] Saved at:', savedTimestamp);
-        
+
         // Display on page
         const debugInfo = document.createElement('div');
         debugInfo.id = 'linkedin-callback-debug-info';
@@ -3481,14 +3450,14 @@ async function handleLinkedInCallback() {
             <small>Check console for full details</small>
         `;
         document.body.appendChild(debugInfo);
-        
+
         // Remove after 15 seconds
         setTimeout(() => {
             const info = document.getElementById('linkedin-callback-debug-info');
             if (info) info.remove();
         }, 15000);
     }
-    
+
     const urlParams = new URLSearchParams(window.location.search);
     const code = urlParams.get('code');
     const state = urlParams.get('state');
@@ -3517,7 +3486,7 @@ async function handleLinkedInCallback() {
         }
         return;
     }
-    
+
     if (!state || !savedState || state !== savedState) {
         console.error('❌ [LINKEDIN CALLBACK] State mismatch!');
         console.error('❌ [LINKEDIN CALLBACK] State from URL:', state);
@@ -3532,7 +3501,7 @@ async function handleLinkedInCallback() {
         }
         return;
     }
-    
+
     console.log('✅ [LINKEDIN CALLBACK] Code and state validated successfully');
 
     try {
@@ -3586,28 +3555,28 @@ async function handleLinkedInCallback() {
             error_param: urlParams.get('error'),
             error_description: urlParams.get('error_description')
         });
-        
+
         // Check for LinkedIn error parameters
         const linkedInError = urlParams.get('error');
         const linkedInErrorDesc = urlParams.get('error_description');
-        
+
         if (linkedInError) {
             console.error('❌ [LINKEDIN CALLBACK] LinkedIn returned error:', linkedInError, linkedInErrorDesc);
             showNotification(
-                siteData.language === 'en' 
-                    ? `LinkedIn error: ${linkedInErrorDesc || linkedInError}` 
-                    : `Erreur LinkedIn: ${linkedInErrorDesc || linkedInError}`, 
+                siteData.language === 'en'
+                    ? `LinkedIn error: ${linkedInErrorDesc || linkedInError}`
+                    : `Erreur LinkedIn: ${linkedInErrorDesc || linkedInError}`,
                 'error'
             );
         } else {
             showNotification(
-                siteData.language === 'en' 
-                    ? `LinkedIn connection error: ${error.message}` 
-                    : `Erreur de connexion LinkedIn: ${error.message}`, 
+                siteData.language === 'en'
+                    ? `LinkedIn connection error: ${error.message}`
+                    : `Erreur de connexion LinkedIn: ${error.message}`,
                 'error'
             );
         }
-        
+
         // Clean up URL on error too
         if (window.history && window.history.replaceState) {
             const cleanUrl = window.location.pathname;
@@ -3618,44 +3587,44 @@ async function handleLinkedInCallback() {
 }
 
 async function fetchLinkedInProfile(code) {
-        // FIX: linkedin-token-exchange - Call backend API to exchange code for token (Cloudflare Worker)
+    // FIX: linkedin-token-exchange - Call backend API to exchange code for token (Cloudflare Worker)
     // ADD: linkedin-user-profile-fetch - Backend fetches user profile data
     try {
-            // Get the redirect URI that was used in the authorization request
-            // Try multiple sources in order of preference
-            let redirectUri = LINKEDIN_CONFIG.redirectUri;
-            if (!redirectUri) {
-                // Try localStorage (saved before redirect)
-                redirectUri = localStorage.getItem('linkedin_debug_redirect_uri');
+        // Get the redirect URI that was used in the authorization request
+        // Try multiple sources in order of preference
+        let redirectUri = LINKEDIN_CONFIG.redirectUri;
+        if (!redirectUri) {
+            // Try localStorage (saved before redirect)
+            redirectUri = localStorage.getItem('linkedin_debug_redirect_uri');
+        }
+        if (!redirectUri) {
+            // Fallback to current URL
+            let pathname = window.location.pathname;
+            if (pathname === '/carriere') {
+                pathname = '/carriere/';
             }
-            if (!redirectUri) {
-                // Fallback to current URL
-                let pathname = window.location.pathname;
-                if (pathname === '/carriere') {
-                    pathname = '/carriere/';
-                }
-                redirectUri = window.location.origin + pathname;
-            }
-            
-            console.log('🔗 [LINKEDIN FETCH] Using redirect URI:', redirectUri);
-            console.log('🔗 [LINKEDIN FETCH] Code received:', code ? 'yes' : 'no');
-            console.log('🔗 [LINKEDIN FETCH] Worker URL:', R2_CONFIG.workerUrl);
-            
-            const response = await fetch(`${R2_CONFIG.workerUrl}/linkedin/auth`, {
+            redirectUri = window.location.origin + pathname;
+        }
+
+        console.log('🔗 [LINKEDIN FETCH] Using redirect URI:', redirectUri);
+        console.log('🔗 [LINKEDIN FETCH] Code received:', code ? 'yes' : 'no');
+        console.log('🔗 [LINKEDIN FETCH] Worker URL:', R2_CONFIG.workerUrl);
+
+        const response = await fetch(`${R2_CONFIG.workerUrl}/linkedin/auth`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ 
-                    code,
-                    redirect_uri: redirectUri  // Pass the same redirect URI used in authorization
-                })
+            body: JSON.stringify({
+                code,
+                redirect_uri: redirectUri  // Pass the same redirect URI used in authorization
+            })
         });
 
-            console.log('🔗 [LINKEDIN FETCH] Response status:', response.status, response.statusText);
+        console.log('🔗 [LINKEDIN FETCH] Response status:', response.status, response.statusText);
 
         if (!response.ok) {
-                const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
-                console.error('❌ [LINKEDIN FETCH] Error response:', errorData);
-                throw new Error(errorData.error || `Failed to authenticate with LinkedIn: ${response.status} ${response.statusText}`);
+            const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
+            console.error('❌ [LINKEDIN FETCH] Error response:', errorData);
+            throw new Error(errorData.error || `Failed to authenticate with LinkedIn: ${response.status} ${response.statusText}`);
         }
 
         const data = await response.json();
@@ -3773,9 +3742,9 @@ if (window.location.search.includes('code=')) {
     const errorDescription = urlParams.get('error_description');
     console.error('❌ [LINKEDIN INIT] LinkedIn returned error:', error, errorDescription);
     showNotification(
-        siteData.language === 'en' 
-            ? `LinkedIn error: ${errorDescription || error}` 
-            : `Erreur LinkedIn: ${errorDescription || error}`, 
+        siteData.language === 'en'
+            ? `LinkedIn error: ${errorDescription || error}`
+            : `Erreur LinkedIn: ${errorDescription || error}`,
         'error'
     );
     // Clean URL
@@ -3871,7 +3840,7 @@ function setupJobSearch() {
             const selectedExperience = experienceFilter ? experienceFilter.value : '';
             const selectedField = fieldFilter ? fieldFilter.value : '';
             const selectedEducation = educationFilter ? educationFilter.value : '';
-            
+
             if (query.length < 2 && !selectedRegion && !selectedExperience && !selectedField && !selectedEducation) {
                 searchResults.classList.remove('show');
                 return;
@@ -3882,7 +3851,7 @@ function setupJobSearch() {
 
                 let matchesQuery = true;
                 if (query.length >= 2) {
-                    matchesQuery = 
+                    matchesQuery =
                         job.title.fr.toLowerCase().includes(query) ||
                         job.title.en.toLowerCase().includes(query) ||
                         job.description.fr.toLowerCase().includes(query) ||
@@ -3895,18 +3864,18 @@ function setupJobSearch() {
 
                 // Filtres avancés
                 let matchesFilters = true;
-                
+
                 if (selectedRegion) {
                     matchesFilters = matchesFilters && job.location.toLowerCase().includes(selectedRegion.toLowerCase());
                 }
-                
+
                 if (selectedExperience) {
                     matchesFilters = matchesFilters && (
                         job.requirements.fr.toLowerCase().includes(selectedExperience.toLowerCase()) ||
                         job.requirements.en.toLowerCase().includes(selectedExperience.toLowerCase())
                     );
                 }
-                
+
                 if (selectedField) {
                     matchesFilters = matchesFilters && (
                         job.title.fr.toLowerCase().includes(selectedField.toLowerCase()) ||
@@ -3920,7 +3889,7 @@ function setupJobSearch() {
             });
 
             searchResults.innerHTML = '';
-            
+
             if (filteredJobs.length > 0) {
                 const resultsHeader = document.createElement('div');
                 resultsHeader.style.cssText = 'padding: 20px 28px; background: var(--primary); color: white; font-weight: 700; font-size: var(--font-size-base);';
@@ -3969,15 +3938,15 @@ function setupJobSearch() {
 
         searchInput.addEventListener('input', performAdvancedSearch);
         searchBtn.addEventListener('click', performAdvancedSearch);
-        
+
         // Setup advanced filters
         [regionFilter, experienceFilter, fieldFilter, educationFilter].forEach(filter => {
             if (filter) {
                 filter.addEventListener('change', performAdvancedSearch);
             }
         });
-        
-        document.addEventListener('click', function(e) {
+
+        document.addEventListener('click', function (e) {
             if (!searchInput.contains(e.target) && !searchResults.contains(e.target) && !searchBtn.contains(e.target)) {
                 searchResults.classList.remove('show');
             }
@@ -4013,14 +3982,14 @@ function updateIsoImages() {
     }
 }
 
-document.addEventListener('DOMContentLoaded', async function() {
+document.addEventListener('DOMContentLoaded', async function () {
     console.log('🚀 [INIT] DOMContentLoaded - currentUser avant loadSiteData:', JSON.stringify(currentUser));
     await loadSiteData().catch(err => console.error('Error loading site data:', err));
     console.log('🚀 [INIT] Après loadSiteData - currentUser:', JSON.stringify(currentUser));
-    
+
     // Apply hero settings after data is loaded (from Firebase or localStorage)
     applyAllHeroSettings();
-    
+
     updateIsoImages(); // FIX: Update ISO images after loading data
     setupNavigation();
     setupLoginSystem();
@@ -4053,7 +4022,7 @@ function setupGlobalEventDelegation() {
     console.log('[QA] Setting up global event delegation...');
 
     // Délégation pour les effets hover sur les éléments dynamiques
-    document.addEventListener('mouseenter', function(e) {
+    document.addEventListener('mouseenter', function (e) {
         const target = e.target;
         if (!target || typeof target.closest !== 'function') return;
 
@@ -4066,7 +4035,7 @@ function setupGlobalEventDelegation() {
         }
     }, true);
 
-    document.addEventListener('mouseleave', function(e) {
+    document.addEventListener('mouseleave', function (e) {
         const target = e.target;
         if (!target || typeof target.closest !== 'function') return;
 
@@ -4086,29 +4055,29 @@ function updateMaintenanceStatus() {
     if (siteData.settings.maintenanceMode) {
         document.body.classList.add('maintenance-mode');
         document.getElementById('maintenanceNotice').style.display = 'block';
-        
+
         if (currentUser.role !== 'admin') {
             showPage('maintenance');
         }
     }
 }
 
-window.addEventListener('error', function(e) {
+window.addEventListener('error', function (e) {
     console.error('Erreur JavaScript:', e.error);
     logActivity('system', `Erreur: ${e.message}`);
 });
 
-window.addEventListener('load', function() {
+window.addEventListener('load', function () {
     const loadTime = performance.now();
     logActivity('system', `Site chargé en ${loadTime.toFixed(2)}ms`);
-    
+
     if (document.getElementById('loadTime')) {
         document.getElementById('loadTime').textContent = `${loadTime.toFixed(2)}ms`;
     }
 });
 
 // Auto-save avec sauvegarde forcée toutes les 30 secondes OPÉRATIONNEL
-setInterval(function() {
+setInterval(function () {
     if (currentUser.isLoggedIn && !saveInProgress) {
         if (forceSaveData()) {
             console.log('🔄 Auto-sauvegarde réussie');
@@ -4120,13 +4089,13 @@ setInterval(function() {
 }, 30000);
 
 // Sauvegarde avant fermeture de page
-window.addEventListener('beforeunload', function(e) {
+window.addEventListener('beforeunload', function (e) {
     if (currentUser.isLoggedIn && !saveInProgress) {
         forceSaveData();
     }
 });
 
-document.addEventListener('keydown', function(e) {
+document.addEventListener('keydown', function (e) {
     if (e.ctrlKey || e.metaKey) {
         switch (e.key) {
             case '1':
@@ -4163,7 +4132,7 @@ document.addEventListener('keydown', function(e) {
                 break;
         }
     }
-    
+
     if (e.key === 'Escape') {
         document.querySelectorAll('.modal.show, .login-modal.show, .admin-modal.show').forEach(modal => {
             modal.classList.remove('show');
@@ -4209,19 +4178,19 @@ function applyAllHeroSettings() {
     const heroTitle = document.getElementById('heroTitle');
     const heroSubtitle = document.getElementById('heroSubtitle');
     const heroBackground = document.getElementById('heroBackground');
-    
+
     // Restore title text
     if (siteData.settings && siteData.settings.title && heroTitle) {
         heroTitle.textContent = siteData.settings.title;
         // Also update page title
         document.title = siteData.settings.title;
     }
-    
+
     // Restore slogan text
     if (siteData.settings && siteData.settings.slogan && heroSubtitle) {
         heroSubtitle.textContent = siteData.settings.slogan;
     }
-    
+
     // Apply title gradient
     if (siteData.titleGradient && heroTitle) {
         heroTitle.style.background = siteData.titleGradient.gradient;
@@ -4229,7 +4198,7 @@ function applyAllHeroSettings() {
         heroTitle.style.webkitTextFillColor = 'transparent';
         heroTitle.style.backgroundClip = 'text';
     }
-    
+
     // Apply slogan gradient
     if (siteData.sloganGradient && heroSubtitle) {
         heroSubtitle.style.background = siteData.sloganGradient.gradient;
@@ -4237,7 +4206,7 @@ function applyAllHeroSettings() {
         heroSubtitle.style.webkitTextFillColor = 'transparent';
         heroSubtitle.style.backgroundClip = 'text';
     }
-    
+
     // Apply description gradient
     if (siteData.descriptionGradient) {
         const heroDescription = document.getElementById('heroDescription');
@@ -4248,37 +4217,37 @@ function applyAllHeroSettings() {
             heroDescription.style.backgroundClip = 'text';
         }
     }
-    
+
     // Apply hero background gradient
     if (siteData.heroBackground && siteData.heroBackground.gradient && heroBackground) {
         heroBackground.style.background = siteData.heroBackground.gradient;
         heroBackground.classList.remove('has-image', 'has-video');
     }
-    
+
     // Apply hero title size
     if (siteData.heroSizes && siteData.heroSizes.title && heroTitle) {
         heroTitle.style.fontSize = siteData.heroSizes.title + 'px';
     }
-    
+
     // Apply hero subtitle size
     if (siteData.heroSizes && siteData.heroSizes.subtitle && heroSubtitle) {
         heroSubtitle.style.fontSize = siteData.heroSizes.subtitle + 'px';
     }
-    
+
     // Apply title formatting
     if (siteData.titleFormatting && heroTitle) {
         heroTitle.style.fontWeight = siteData.titleFormatting.bold ? '900' : '800';
         heroTitle.style.fontStyle = siteData.titleFormatting.italic ? 'italic' : 'normal';
         heroTitle.style.textDecoration = siteData.titleFormatting.underline ? 'underline' : 'none';
     }
-    
+
     // Apply subtitle formatting
     if (siteData.subtitleFormatting && heroSubtitle) {
         heroSubtitle.style.fontWeight = siteData.subtitleFormatting.bold ? '700' : '400';
         heroSubtitle.style.fontStyle = siteData.subtitleFormatting.italic ? 'italic' : 'normal';
         heroSubtitle.style.textDecoration = siteData.subtitleFormatting.underline ? 'underline' : 'none';
     }
-    
+
     console.log('✅ Hero settings applied to DOM');
 }
 function renderHomeContent() {
@@ -4286,7 +4255,7 @@ function renderHomeContent() {
     if (homeServicesGrid) {
         homeServicesGrid.innerHTML = '';
         const activeServices = siteData.services.filter(s => s.active).slice(0, 3);
-        
+
         activeServices.forEach(service => {
             const serviceCard = document.createElement('div');
             serviceCard.className = 'home-presentation-card';
@@ -4303,7 +4272,7 @@ function renderHomeContent() {
     if (homeJobsGrid) {
         homeJobsGrid.innerHTML = '';
         const activeJobs = siteData.jobs.filter(j => j.active).slice(0, 3);
-        
+
         activeJobs.forEach(job => {
             const jobCard = document.createElement('div');
             jobCard.className = 'home-presentation-card';
@@ -4333,7 +4302,7 @@ function renderHomeClients() {
         homeClientsTrack.innerHTML = '';
         const activeClients = siteData.clients.filter(c => c.active);
         const clientsToRender = [...activeClients, ...activeClients];
-        
+
         clientsToRender.forEach(client => {
             const clientLogo = document.createElement('div');
             clientLogo.className = 'client-logo-item';
@@ -4345,11 +4314,11 @@ function renderHomeClients() {
 function renderHomeTestimonials() {
     const homeTestimonialsTrack = document.getElementById('homeTestimonialsTrack');
     const testimonialsDots = document.getElementById('testimonialsDots');
-    
+
     if (homeTestimonialsTrack) {
         homeTestimonialsTrack.innerHTML = '';
         const activeTestimonials = siteData.testimonials.filter(t => t.active);
-        
+
         activeTestimonials.forEach((testimonial, index) => {
             const testimonialSlide = document.createElement('div');
             testimonialSlide.className = 'testimonial-slide';
@@ -4394,7 +4363,7 @@ function renderHomeTestimonials() {
 function updateTestimonialCarousel() {
     const track = document.getElementById('homeTestimonialsTrack');
     const activeTestimonials = siteData.testimonials.filter(t => t.active);
-    
+
     if (track && activeTestimonials.length > 0) {
         const translateX = -(currentTestimonialIndex * 100);
         track.style.transform = `translateX(${translateX}%)`;
@@ -4426,15 +4395,15 @@ function startTestimonialAutoSlide() {
 function setupHomeInteractions() {
     const homeBrochureDownload = document.getElementById('homeBrochureDownload');
     if (homeBrochureDownload) {
-        homeBrochureDownload.addEventListener('click', function(e) {
+        homeBrochureDownload.addEventListener('click', function (e) {
             e.preventDefault();
-            
+
             if (siteData.brochure && siteData.brochure.url) {
                 const link = document.createElement('a');
                 link.href = siteData.brochure.url;
                 link.download = siteData.brochure.name || 'Brochure_AE2I.pdf';
                 link.click();
-                
+
                 showNotification(siteData.language === 'en' ? 'AE2I 2025 brochure download started' : 'Téléchargement de la brochure AE2I 2025 démarré', 'success');
                 logActivity(currentUser.username || 'visitor', 'Brochure téléchargée depuis accueil');
             } else {
@@ -4445,9 +4414,9 @@ function setupHomeInteractions() {
 
     const homePrevTestimonial = document.getElementById('homePrevTestimonial');
     const homeNextTestimonial = document.getElementById('homeNextTestimonial');
-    
+
     if (homePrevTestimonial) {
-        homePrevTestimonial.addEventListener('click', function() {
+        homePrevTestimonial.addEventListener('click', function () {
             const activeTestimonials = siteData.testimonials.filter(t => t.active);
             if (activeTestimonials.length > 0) {
                 currentTestimonialIndex = (currentTestimonialIndex - 1 + activeTestimonials.length) % activeTestimonials.length;
@@ -4457,9 +4426,9 @@ function setupHomeInteractions() {
             }
         });
     }
-    
+
     if (homeNextTestimonial) {
-        homeNextTestimonial.addEventListener('click', function() {
+        homeNextTestimonial.addEventListener('click', function () {
             const activeTestimonials = siteData.testimonials.filter(t => t.active);
             if (activeTestimonials.length > 0) {
                 currentTestimonialIndex = (currentTestimonialIndex + 1) % activeTestimonials.length;
@@ -4478,14 +4447,14 @@ function executeAboutScript() {
 
 function setupAboutInteractions() {
     /* FIX: iso-hover-visibility + responsive-iso-hover + iso-touch-compatibility */
-    window.showIsoPreview = function() {
+    window.showIsoPreview = function () {
         const preview = document.getElementById('aboutIsoPreview');
         if (preview) {
             preview.classList.add('show');
         }
     };
 
-    window.hideIsoPreview = function() {
+    window.hideIsoPreview = function () {
         const preview = document.getElementById('aboutIsoPreview');
         if (preview) {
             preview.classList.remove('show');
@@ -4500,7 +4469,7 @@ function setupAboutInteractions() {
         let isPreviewOpen = false;
 
         // Clic/tap toggle pour mobile et tablette
-        isoQr.addEventListener('click', function(e) {
+        isoQr.addEventListener('click', function (e) {
             e.preventDefault();
             e.stopPropagation();
 
@@ -4516,7 +4485,7 @@ function setupAboutInteractions() {
         });
 
         // Fermer au clic en dehors
-        document.addEventListener('click', function(e) {
+        document.addEventListener('click', function (e) {
             if (isPreviewOpen && !isoQr.contains(e.target) && !isoPreview.contains(e.target)) {
                 hideIsoPreview();
                 isPreviewOpen = false;
@@ -4526,26 +4495,26 @@ function setupAboutInteractions() {
 
         // Sur PC: hover fonctionne normalement
         if (window.matchMedia('(hover: hover) and (pointer: fine)').matches) {
-            isoQr.addEventListener('mouseenter', function() {
+            isoQr.addEventListener('mouseenter', function () {
                 if (!isPreviewOpen) {
                     showIsoPreview();
                 }
             });
 
-            isoQr.addEventListener('mouseleave', function() {
+            isoQr.addEventListener('mouseleave', function () {
                 if (!isPreviewOpen) {
                     hideIsoPreview();
                 }
             });
 
             // Hover sur le preview lui-m\u00eame
-            isoPreview.addEventListener('mouseenter', function() {
+            isoPreview.addEventListener('mouseenter', function () {
                 if (!isPreviewOpen) {
                     showIsoPreview();
                 }
             });
 
-            isoPreview.addEventListener('mouseleave', function() {
+            isoPreview.addEventListener('mouseleave', function () {
                 if (!isPreviewOpen) {
                     hideIsoPreview();
                 }
@@ -4556,10 +4525,10 @@ function setupAboutInteractions() {
     const statItems = document.querySelectorAll('.about-stat-item');
     statItems.forEach((item, index) => {
         item.style.animationDelay = `${index * 0.1}s`;
-        item.addEventListener('mouseenter', function() {
+        item.addEventListener('mouseenter', function () {
             this.style.transform = 'translateY(-8px) scale(1.05)';
         });
-        item.addEventListener('mouseleave', function() {
+        item.addEventListener('mouseleave', function () {
             this.style.transform = 'translateY(0) scale(1)';
         });
     });
@@ -4576,7 +4545,7 @@ function renderServicesPage() {
     if (servicesGrid) {
         servicesGrid.innerHTML = '';
         const activeServices = siteData.services.filter(s => s.active);
-        
+
         activeServices.forEach(service => {
             const serviceCard = document.createElement('div');
             serviceCard.className = 'service-card';
@@ -4600,19 +4569,19 @@ function renderServicesPage() {
 
 function setupServicesInteractions() {
     document.querySelectorAll('.service-card').forEach(card => {
-        card.addEventListener('mouseenter', function() {
+        card.addEventListener('mouseenter', function () {
             this.style.transform = 'translateY(-12px) scale(1.02)';
             this.style.boxShadow = 'var(--shadow-2xl)';
         });
-        
-        card.addEventListener('mouseleave', function() {
+
+        card.addEventListener('mouseleave', function () {
             this.style.transform = 'translateY(0) scale(1)';
             this.style.boxShadow = 'var(--shadow-lg)';
         });
     });
 
     document.querySelectorAll('.service-link').forEach(link => {
-        link.addEventListener('click', function(e) {
+        link.addEventListener('click', function (e) {
             e.preventDefault();
             showPage('contact');
             showNotification(siteData.language === 'en' ? 'Contact us to learn more about this service!' : 'Contactez-nous pour en savoir plus sur ce service!', 'info');
@@ -4628,16 +4597,16 @@ function executeQualiteScript() {
 
 function initializePrismEffect() {
     const qualiteSections = document.querySelectorAll('.qualite-section');
-    
+
     qualiteSections.forEach((section, index) => {
-        section.addEventListener('mouseenter', function() {
+        section.addEventListener('mouseenter', function () {
             const prism = document.querySelector('.prism');
             if (prism) {
                 prism.style.animationDuration = '10s';
             }
         });
-        
-        section.addEventListener('mouseleave', function() {
+
+        section.addEventListener('mouseleave', function () {
             const prism = document.querySelector('.prism');
             if (prism) {
                 prism.style.animationDuration = '20s';
@@ -4649,8 +4618,8 @@ function initializePrismEffect() {
 function setupQualiteInteractions() {
     document.querySelectorAll('.qualite-engagement-item').forEach((item, index) => {
         item.style.animationDelay = `${index * 0.2}s`;
-        
-        item.addEventListener('click', function() {
+
+        item.addEventListener('click', function () {
             const title = this.querySelector('.qualite-engagement-title').textContent;
             showNotification(`${siteData.language === 'en' ? 'Commitment:' : 'Engagement:'} ${title}`, 'info');
             logActivity(currentUser.username || 'visitor', `Engagement qualité consulté: ${title}`);
@@ -4838,7 +4807,7 @@ function resetMultiFilters() {
 }
 
 // Close dropdowns when clicking outside
-document.addEventListener('click', function(e) {
+document.addEventListener('click', function (e) {
     if (!e.target.closest('.filter-multiselect-container')) {
         document.querySelectorAll('.filter-multiselect-dropdown').forEach(dropdown => {
             dropdown.style.display = 'none';
@@ -4852,19 +4821,19 @@ function renderCarriereJobs() {
     if (jobsGrid) {
         jobsGrid.innerHTML = '';
         const activeJobs = siteData.jobs.filter(j => j.active);
-        
+
         // Pagination pour 20+ offres
         const startIndex = (currentJobsPage - 1) * jobsPerPage;
         const endIndex = startIndex + jobsPerPage;
         const jobsToShow = activeJobs.slice(startIndex, endIndex);
-        
+
         jobsToShow.forEach(job => {
             const jobCard = document.createElement('div');
             /* FIX: Removed premium class */
             jobCard.className = 'carriere-job-card';
             jobCard.setAttribute('data-type', job.type);
             if (job.isNew) jobCard.setAttribute('data-new', 'true');
-            
+
             /* FIX: Restructured card - large title at top, job type badge at bottom, redesigned apply button */
             jobCard.innerHTML = `
                 <div class="carriere-job-content">
@@ -4903,9 +4872,9 @@ function renderCarriereJobs() {
 function setupJobsPagination() {
     const prevBtn = document.getElementById('prevPage');
     const nextBtn = document.getElementById('nextPage');
-    
+
     if (prevBtn) {
-        prevBtn.addEventListener('click', function() {
+        prevBtn.addEventListener('click', function () {
             if (currentJobsPage > 1) {
                 currentJobsPage--;
                 renderCarriereJobs();
@@ -4913,12 +4882,12 @@ function setupJobsPagination() {
             }
         });
     }
-    
+
     if (nextBtn) {
-        nextBtn.addEventListener('click', function() {
+        nextBtn.addEventListener('click', function () {
             const totalJobs = siteData.jobs.filter(j => j.active).length;
             const totalPages = Math.ceil(totalJobs / jobsPerPage);
-            
+
             if (currentJobsPage < totalPages) {
                 currentJobsPage++;
                 renderCarriereJobs();
@@ -4932,19 +4901,19 @@ function updatePagination(totalJobs) {
     const pagination = document.getElementById('carrierePagination');
     const paginationInfo = document.getElementById('paginationInfo');
     const totalPages = Math.ceil(totalJobs / jobsPerPage);
-    
+
     if (totalPages > 1) {
         pagination.style.display = 'flex';
         paginationInfo.textContent = `Page ${currentJobsPage} sur ${totalPages}`;
-        
+
         const prevBtn = document.getElementById('prevPage');
         const nextBtn = document.getElementById('nextPage');
-        
+
         if (prevBtn) {
             prevBtn.disabled = currentJobsPage === 1;
             prevBtn.style.opacity = currentJobsPage === 1 ? '0.5' : '1';
         }
-        
+
         if (nextBtn) {
             nextBtn.disabled = currentJobsPage === totalPages;
             nextBtn.style.opacity = currentJobsPage === totalPages ? '0.5' : '1';
@@ -4960,18 +4929,18 @@ function setupAdvancedJobSearch() {
     const experienceFilter = document.getElementById('experienceFilter');
     const fieldFilter = document.getElementById('fieldFilter');
     const educationFilter = document.getElementById('educationFilter');
-    
+
     // Setup advanced search with all filters
     [regionFilter, experienceFilter, fieldFilter, educationFilter].forEach(filter => {
         if (filter) {
-            filter.addEventListener('change', function() {
+            filter.addEventListener('change', function () {
                 // Reset pagination when filtering
                 currentJobsPage = 1;
-                
+
                 // Trigger search if there's a query or any filter is selected
                 const hasQuery = searchInput && searchInput.value.trim().length >= 2;
                 const hasFilters = [regionFilter, experienceFilter, fieldFilter, educationFilter].some(f => f && f.value);
-                
+
                 if (hasQuery || hasFilters) {
                     // Trigger the search function from global script
                     if (window.performAdvancedSearch) {
@@ -4984,15 +4953,15 @@ function setupAdvancedJobSearch() {
 }
 function setupCarriereFilters() {
     document.querySelectorAll('.carriere-filter-btn').forEach(btn => {
-        btn.addEventListener('click', function() {
+        btn.addEventListener('click', function () {
             document.querySelectorAll('.carriere-filter-btn').forEach(b => b.classList.remove('active'));
             this.classList.add('active');
-            
+
             const filter = this.getAttribute('data-filter');
             currentJobsPage = 1; // Reset pagination
-            
+
             const jobCards = document.querySelectorAll('.carriere-job-card');
-            
+
             jobCards.forEach((card, index) => {
                 if (filter === 'all' || card.getAttribute('data-type') === filter) {
                     card.style.display = 'flex';
@@ -5001,11 +4970,11 @@ function setupCarriereFilters() {
                     card.style.display = 'none';
                 }
             });
-            
+
             // Recalculer la pagination
             const visibleJobs = siteData.jobs.filter(j => j.active && (filter === 'all' || j.type === filter));
             updatePagination(visibleJobs.length);
-            
+
             logActivity(currentUser.username || 'visitor', `Filtrage emplois: ${filter}`);
         });
     });
@@ -5013,12 +4982,12 @@ function setupCarriereFilters() {
 
 function setupCarriereInteractions() {
     document.querySelectorAll('.carriere-job-card').forEach(card => {
-        card.addEventListener('mouseenter', function() {
+        card.addEventListener('mouseenter', function () {
             this.style.transform = 'translateY(-4px) scale(1.01)';
             this.style.boxShadow = 'var(--shadow-xl)';
         });
-        
-        card.addEventListener('mouseleave', function() {
+
+        card.addEventListener('mouseleave', function () {
             this.style.transform = 'translateY(0) scale(1)';
             this.style.boxShadow = 'var(--shadow-lg)';
         });
@@ -5053,7 +5022,7 @@ function openApplicationForm(jobId) {
         logActivity(currentUser.username || 'visitor', `Formulaire candidature ouvert: ${job.title.fr}`);
 
         /* FIX: Setup driver license event listeners when modal opens */
-        setTimeout(function() {
+        setTimeout(function () {
             const licenseRadios = document.querySelectorAll('input[name="hasDriverLicense"]');
             console.log('Modal opened - setting up license radios, found:', licenseRadios.length);
 
@@ -5125,26 +5094,26 @@ function updateContactPageInfo() {
 function setupContactForm() {
     const contactForm = document.getElementById('contactPageForm');
     if (contactForm) {
-        contactForm.addEventListener('submit', function(e) {
+        contactForm.addEventListener('submit', function (e) {
             e.preventDefault();
-            
+
             if (!checkConsentRequired('forms')) {
                 showNotification(siteData.language === 'en' ? 'Consent required to send a message' : 'Consentement requis pour envoyer un message', 'warning');
                 return;
             }
-            
+
             const formData = new FormData(this);
             const name = formData.get('name');
             const email = formData.get('email');
             const subject = formData.get('subject');
             const message = formData.get('message');
             const phone = formData.get('phone');
-            
+
             if (!name || !email || !subject || !message) {
                 showNotification(siteData.language === 'en' ? 'Please fill in all required fields' : 'Veuillez remplir tous les champs obligatoires', 'error');
                 return;
             }
-            
+
             const contactMessage = {
                 id: Date.now(),
                 name: name,
@@ -5156,18 +5125,18 @@ function setupContactForm() {
                 status: 'unread',
                 consentGiven: consentStatus.accepted
             };
-            
+
             if (!siteData.contactMessages) siteData.contactMessages = [];
             siteData.contactMessages.unshift(contactMessage);
-            
+
             if (forceSaveData()) {
-                const successMsg = siteData.language === 'en' ? 
+                const successMsg = siteData.language === 'en' ?
                     `Thank you ${name}! Your message has been sent successfully.` :
                     `Merci ${name}! Votre message a été envoyé avec succès.`;
-                
+
                 showNotification(successMsg, 'success');
                 this.reset();
-                
+
                 logActivity(currentUser.username || 'visitor', `Message de contact envoyé: ${subject}`);
             } else {
                 showNotification('Échec d\'envoi du message', 'error');
@@ -5178,7 +5147,7 @@ function setupContactForm() {
 
 function setupContactInteractions() {
     document.querySelectorAll('.contact-item').forEach(item => {
-        item.addEventListener('mouseenter', function() {
+        item.addEventListener('mouseenter', function () {
             this.style.transform = 'translateX(8px)';
             this.style.boxShadow = 'var(--shadow-md)';
             this.style.borderLeft = '4px solid var(--primary)';
@@ -5191,7 +5160,7 @@ function setupContactInteractions() {
             }
         });
 
-        item.addEventListener('mouseleave', function() {
+        item.addEventListener('mouseleave', function () {
             this.style.transform = 'translateX(0)';
             this.style.boxShadow = '';
             this.style.borderLeft = '';
@@ -5207,7 +5176,7 @@ function setupContactInteractions() {
 
     const contactEmail = document.getElementById('contactPageEmail');
     if (contactEmail) {
-        contactEmail.addEventListener('click', function(e) {
+        contactEmail.addEventListener('click', function (e) {
             e.preventDefault();
             window.location.href = `mailto:${siteData.settings.contact.email}?subject=${siteData.language === 'en' ? 'AE2I Information Request' : 'Demande d\'information AE2I'}`;
             logActivity(currentUser.username || 'visitor', 'Email de contact cliqué');
@@ -5217,7 +5186,7 @@ function setupContactInteractions() {
 
 function executeAdminScript() {
     console.log('⚙️ Executing admin dashboard script');
-    
+
     // Ensure logout button is visible
     const logoutBtn = document.querySelector('#admin-page .btn-logout');
     if (logoutBtn) {
@@ -5226,7 +5195,7 @@ function executeAdminScript() {
     } else {
         console.warn('⚠️ [ADMIN SCRIPT] Logout button not found');
     }
-    
+
     setupAdminTabs();
     renderAdminContent();
     setupAdminForms();
@@ -5238,7 +5207,7 @@ function executeAdminScript() {
 
 function setupAdminTabs() {
     document.querySelectorAll('.admin-tab').forEach(tab => {
-        tab.addEventListener('click', function() {
+        tab.addEventListener('click', function () {
             const tabId = this.getAttribute('data-tab');
             showAdminTab(tabId);
         });
@@ -5310,14 +5279,14 @@ function initializeHeroSettings() {
         if (descriptionGradientStart) descriptionGradientStart.value = siteData.descriptionGradient.start;
         if (descriptionGradientEnd) descriptionGradientEnd.value = siteData.descriptionGradient.end;
     }
-    
+
     // Restore hero title size
     if (siteData.heroSizes && siteData.heroSizes.title) {
         const titleSize = siteData.heroSizes.title;
         const heroTitleSizeSlider = document.getElementById('heroTitleSize');
         const heroTitleSizeValue = document.getElementById('heroTitleSizeValue');
         const heroTitle = document.getElementById('heroTitle');
-        
+
         if (heroTitleSizeSlider) {
             heroTitleSizeSlider.value = titleSize;
         }
@@ -5328,14 +5297,14 @@ function initializeHeroSettings() {
             heroTitle.style.fontSize = titleSize + 'px';
         }
     }
-    
+
     // Restore hero subtitle size
     if (siteData.heroSizes && siteData.heroSizes.subtitle) {
         const subtitleSize = siteData.heroSizes.subtitle;
         const heroSubtitleSizeSlider = document.getElementById('heroSubtitleSize');
         const heroSubtitleSizeValue = document.getElementById('heroSubtitleSizeValue');
         const heroSubtitle = document.getElementById('heroSubtitle');
-        
+
         if (heroSubtitleSizeSlider) {
             heroSubtitleSizeSlider.value = subtitleSize;
         }
@@ -5346,7 +5315,7 @@ function initializeHeroSettings() {
             heroSubtitle.style.fontSize = subtitleSize + 'px';
         }
     }
-    
+
     // Restore subtitle formatting
     if (siteData.subtitleFormatting) {
         const heroSubtitle = document.getElementById('heroSubtitle');
@@ -5356,7 +5325,7 @@ function initializeHeroSettings() {
             heroSubtitle.style.textDecoration = siteData.subtitleFormatting.underline ? 'underline' : 'none';
         }
     }
-    
+
     // Restore title formatting
     if (siteData.titleFormatting) {
         const heroTitle = document.getElementById('heroTitle');
@@ -5366,10 +5335,10 @@ function initializeHeroSettings() {
             heroTitle.style.textDecoration = siteData.titleFormatting.underline ? 'underline' : 'none';
         }
     }
-    
+
     // Apply all hero settings to DOM (in case they weren't applied on page load)
     applyAllHeroSettings();
-    
+
     updateGradientPreviews();
 }
 
@@ -5386,9 +5355,9 @@ function setupColorPickers() {
     // Setup color pickers avec affichage des valeurs
     const primaryColorPicker = document.getElementById('primaryColor');
     const secondaryColorPicker = document.getElementById('secondaryColor');
-    
+
     if (primaryColorPicker) {
-        primaryColorPicker.addEventListener('change', function() {
+        primaryColorPicker.addEventListener('change', function () {
             const value = this.value;
             document.getElementById('primaryColorValue').textContent = value;
             document.documentElement.style.setProperty('--primary', value);
@@ -5396,9 +5365,9 @@ function setupColorPickers() {
             forceSaveData();
         });
     }
-    
+
     if (secondaryColorPicker) {
-        secondaryColorPicker.addEventListener('change', function() {
+        secondaryColorPicker.addEventListener('change', function () {
             const value = this.value;
             document.getElementById('secondaryColorValue').textContent = value;
             document.documentElement.style.setProperty('--secondary', value);
@@ -5487,12 +5456,12 @@ function renderRecruitmentEmails() {
 function addRecruitmentEmail() {
     const emailInput = document.getElementById('recruitmentEmail');
     const email = emailInput.value.trim();
-    
+
     if (email && email.includes('@')) {
         if (!siteData.settings.recruitmentEmails) {
             siteData.settings.recruitmentEmails = [];
         }
-        
+
         if (!siteData.settings.recruitmentEmails.includes(email)) {
             siteData.settings.recruitmentEmails.push(email);
             emailInput.value = '';
@@ -5553,17 +5522,17 @@ function saveSocialNetworks() {
     if (!siteData.settings.contact.socialLinks) {
         siteData.settings.contact.socialLinks = {};
     }
-    
+
     siteData.settings.contact.socialLinks.linkedin = document.getElementById('linkedinUrl').value;
     siteData.settings.contact.socialLinks.facebook = document.getElementById('facebookUrl').value;
     siteData.settings.contact.socialLinks.twitter = document.getElementById('twitterUrl').value;
     siteData.settings.contact.socialLinks.instagram = document.getElementById('instagramUrl').value;
     siteData.settings.contact.socialLinks.youtube = document.getElementById('youtubeUrl').value;
     siteData.settings.contact.socialLinks.tiktok = document.getElementById('tiktokUrl').value;
-    
+
     // Mettre à jour les liens dans le footer
     updateFooterSocialLinks();
-    
+
     if (forceSaveData()) {
         showNotification(siteData.language === 'en' ? 'Social networks saved' : 'Réseaux sociaux sauvegardés', 'success');
         logActivity(currentUser.username, 'Réseaux sociaux mis à jour');
@@ -5589,7 +5558,7 @@ function renderContactMessages() {
     const container = document.getElementById('contactMessagesList');
     if (container) {
         container.innerHTML = '';
-        
+
         if (siteData.contactMessages && siteData.contactMessages.length > 0) {
             siteData.contactMessages.slice(0, 10).forEach((msg, index) => {
                 const messageItem = document.createElement('div');
@@ -5634,19 +5603,19 @@ function renderContactMessages() {
                         </button>
                     </div>
                 `;
-                
-                messageItem.addEventListener('mouseenter', function() {
+
+                messageItem.addEventListener('mouseenter', function () {
                     this.style.transform = 'translateY(-5px)';
                     this.style.boxShadow = 'var(--shadow-lg)';
                     this.style.borderColor = 'var(--primary)';
                 });
-                
-                messageItem.addEventListener('mouseleave', function() {
+
+                messageItem.addEventListener('mouseleave', function () {
                     this.style.transform = 'translateY(0)';
                     this.style.boxShadow = 'var(--shadow-md)';
                     this.style.borderColor = 'var(--border)';
                 });
-                
+
                 container.appendChild(messageItem);
             });
         } else {
@@ -5659,7 +5628,7 @@ function updateContactStats() {
     if (siteData.contactMessages) {
         const total = siteData.contactMessages.length;
         const unread = siteData.contactMessages.filter(msg => msg.status === 'unread').length;
-        
+
         document.getElementById('totalMessages').textContent = total;
         document.getElementById('unreadMessages').textContent = unread;
     }
@@ -5703,11 +5672,11 @@ function saveContactSettings() {
     siteData.settings.contact.email = document.getElementById('contactEmailAdmin').value;
     siteData.settings.contact.hours = document.getElementById('contactHours').value;
     siteData.settings.contact.googleMapsUrl = document.getElementById('googleMapsUrl').value;
-    
+
     if (forceSaveData()) {
         showNotification(siteData.language === 'en' ? 'Contact settings saved' : 'Paramètres de contact sauvegardés', 'success');
         logActivity(currentUser.username, 'Paramètres de contact mis à jour');
-        
+
         if (currentPage === 'contact') {
             executeContactScript();
         }
@@ -5722,31 +5691,31 @@ function updateGradientPreviews() {
     const descriptionPreview = document.getElementById('descriptionGradientPreview');
     const heroPreview = document.getElementById('heroGradientPreview');
     const footerPreview = document.getElementById('footerGradientPreview');
-    
+
     if (titlePreview) {
         const start = document.getElementById('titleGradientStart').value;
         const end = document.getElementById('titleGradientEnd').value;
         titlePreview.style.background = `linear-gradient(135deg, ${start} 0%, ${end} 100%)`;
     }
-    
+
     if (sloganPreview) {
         const start = document.getElementById('sloganGradientStart').value;
         const end = document.getElementById('sloganGradientEnd').value;
         sloganPreview.style.background = `linear-gradient(135deg, ${start} 0%, ${end} 100%)`;
     }
-    
+
     if (descriptionPreview) {
         const start = document.getElementById('descriptionGradientStart').value;
         const end = document.getElementById('descriptionGradientEnd').value;
         descriptionPreview.style.background = `linear-gradient(135deg, ${start} 0%, ${end} 100%)`;
     }
-    
+
     if (heroPreview) {
         const start = document.getElementById('heroGradientStart').value;
         const end = document.getElementById('heroGradientEnd').value;
         heroPreview.style.background = `linear-gradient(135deg, ${start} 0%, ${end} 100%)`;
     }
-    
+
     if (footerPreview) {
         const start = document.getElementById('footerGradientStart').value;
         const end = document.getElementById('footerGradientEnd').value;
@@ -5929,7 +5898,7 @@ async function updateSiteTitle() {
 async function updateSiteSlogan() {
     const slogan = document.getElementById('siteSlogan').value;
     siteData.settings.slogan = slogan;
-    
+
     // Mettre à jour les éléments de la page
     const heroSubtitle = document.getElementById('heroSubtitle');
     if (heroSubtitle) {
@@ -5952,10 +5921,10 @@ async function updateSiteSlogan() {
             heroSubtitle.style.fontSize = siteData.heroSizes.subtitle + 'px';
         }
     }
-    
+
     // Save to Firebase immediately using helper function
     await saveAdminDataToFirestore('settings', 'main', siteData.settings, 'Site slogan');
-    
+
     if (forceSaveData()) {
         showNotification('Slogan du site mis à jour', 'success');
         logActivity(currentUser.username, 'Slogan du site modifié');
@@ -5967,10 +5936,10 @@ async function updateSiteSlogan() {
 async function updateSiteDescription() {
     const description = document.getElementById('siteDescription').value;
     siteData.settings.description = description;
-    
+
     // Save to Firestore
     await saveAdminDataToFirestore('settings', 'main', siteData.settings, 'Site description');
-    
+
     if (forceSaveData()) {
         showNotification('Description du site mise à jour', 'success');
         logActivity(currentUser.username, 'Description du site modifiée');
@@ -5982,13 +5951,13 @@ async function updateSiteDescription() {
 async function applyTitleGradient() {
     const start = document.getElementById('titleGradientStart').value;
     const end = document.getElementById('titleGradientEnd').value;
-    
+
     siteData.titleGradient = {
         start: start,
         end: end,
         gradient: `linear-gradient(135deg, ${start} 0%, ${end} 100%)`
     };
-    
+
     // Appliquer le gradient au titre hero
     const heroTitle = document.getElementById('heroTitle');
     if (heroTitle) {
@@ -5997,7 +5966,7 @@ async function applyTitleGradient() {
         heroTitle.style.webkitTextFillColor = 'transparent';
         heroTitle.style.backgroundClip = 'text';
     }
-    
+
     // Save to Firebase immediately using helper function
     const heroSettings = {
         titleGradient: siteData.titleGradient,
@@ -6009,7 +5978,7 @@ async function applyTitleGradient() {
         subtitleFormatting: siteData.subtitleFormatting
     };
     await saveAdminDataToFirestore('heroSettings', 'main', heroSettings, 'Hero title gradient');
-    
+
     if (forceSaveData()) {
         showNotification('Dégradé titre appliqué', 'success');
         logActivity(currentUser.username, 'Dégradé titre modifié');
@@ -6020,13 +5989,13 @@ async function applyTitleGradient() {
 async function applySloganGradient() {
     const start = document.getElementById('sloganGradientStart').value;
     const end = document.getElementById('sloganGradientEnd').value;
-    
+
     siteData.sloganGradient = {
         start: start,
         end: end,
         gradient: `linear-gradient(135deg, ${start} 0%, ${end} 100%)`
     };
-    
+
     // Appliquer le gradient au slogan hero
     const heroSubtitle = document.getElementById('heroSubtitle');
     if (heroSubtitle) {
@@ -6035,7 +6004,7 @@ async function applySloganGradient() {
         heroSubtitle.style.webkitTextFillColor = 'transparent';
         heroSubtitle.style.backgroundClip = 'text';
     }
-    
+
     // Save to Firebase immediately using helper function
     const heroSettings = {
         titleGradient: siteData.titleGradient,
@@ -6047,7 +6016,7 @@ async function applySloganGradient() {
         subtitleFormatting: siteData.subtitleFormatting
     };
     await saveAdminDataToFirestore('heroSettings', 'main', heroSettings, 'Hero slogan gradient');
-    
+
     if (forceSaveData()) {
         showNotification('Dégradé slogan appliqué', 'success');
         logActivity(currentUser.username, 'Dégradé slogan modifié');
@@ -6058,13 +6027,13 @@ async function applySloganGradient() {
 async function applyDescriptionGradient() {
     const start = document.getElementById('descriptionGradientStart').value;
     const end = document.getElementById('descriptionGradientEnd').value;
-    
+
     siteData.descriptionGradient = {
         start: start,
         end: end,
         gradient: `linear-gradient(135deg, ${start} 0%, ${end} 100%)`
     };
-    
+
     // Save to Firebase immediately using helper function
     const heroSettings = {
         titleGradient: siteData.titleGradient,
@@ -6076,7 +6045,7 @@ async function applyDescriptionGradient() {
         subtitleFormatting: siteData.subtitleFormatting
     };
     await saveAdminDataToFirestore('heroSettings', 'main', heroSettings, 'Hero description gradient');
-    
+
     if (forceSaveData()) {
         showNotification('Dégradé description appliqué', 'success');
         logActivity(currentUser.username, 'Dégradé description modifié');
@@ -6088,18 +6057,18 @@ async function applyDescriptionGradient() {
 async function applyHeroGradient() {
     const start = document.getElementById('heroGradientStart').value;
     const end = document.getElementById('heroGradientEnd').value;
-    
+
     siteData.heroBackground = {
         type: 'gradient',
         gradient: `linear-gradient(135deg, ${start} 0%, ${end} 100%)`
     };
-    
+
     const heroBackground = document.getElementById('heroBackground');
     if (heroBackground) {
         heroBackground.style.background = siteData.heroBackground.gradient;
         heroBackground.classList.remove('has-image', 'has-video');
     }
-    
+
     // Save to Firebase immediately using helper function
     const heroSettings = {
         titleGradient: siteData.titleGradient,
@@ -6111,7 +6080,7 @@ async function applyHeroGradient() {
         subtitleFormatting: siteData.subtitleFormatting
     };
     await saveAdminDataToFirestore('heroSettings', 'main', heroSettings, 'Hero background gradient');
-    
+
     if (forceSaveData()) {
         showNotification('Dégradé hero appliqué', 'success');
         logActivity(currentUser.username, 'Dégradé hero modifié');
@@ -6123,18 +6092,18 @@ async function applyHeroGradient() {
 function applyFooterGradient() {
     const start = document.getElementById('footerGradientStart').value;
     const end = document.getElementById('footerGradientEnd').value;
-    
+
     siteData.footerBackground = {
         type: 'gradient',
         gradient: `linear-gradient(135deg, ${start} 0%, ${end} 100%)`
     };
-    
+
     const footerBackground = document.getElementById('footerBackground');
     if (footerBackground) {
         footerBackground.style.background = siteData.footerBackground.gradient;
         footerBackground.classList.remove('has-image', 'has-video');
     }
-    
+
     if (forceSaveData()) {
         showNotification('Dégradé footer appliqué', 'success');
         logActivity(currentUser.username, 'Dégradé footer modifié');
@@ -6158,18 +6127,18 @@ function setFooterBackground(type) {
 function removeHeroBackground() {
     if (confirm(siteData.language === 'en' ? 'Remove hero background?' : 'Supprimer le fond hero?')) {
         delete siteData.heroBackground;
-        
+
         const heroBackground = document.getElementById('heroBackground');
         if (heroBackground) {
             heroBackground.style.background = 'linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%)';
             heroBackground.classList.remove('has-image', 'has-video');
         }
-        
+
         const heroVideo = document.getElementById('heroVideo');
         if (heroVideo) {
             heroVideo.style.display = 'none';
         }
-        
+
         if (forceSaveData()) {
             showNotification('Fond hero supprimé', 'success');
             logActivity(currentUser.username, 'Fond hero supprimé');
@@ -6182,18 +6151,18 @@ function removeHeroBackground() {
 function removeFooterBackground() {
     if (confirm(siteData.language === 'en' ? 'Remove footer background?' : 'Supprimer le fond footer?')) {
         delete siteData.footerBackground;
-        
+
         const footerBackground = document.getElementById('footerBackground');
         if (footerBackground) {
             footerBackground.style.background = 'linear-gradient(135deg, #1e293b 0%, #0f1419 100%)';
             footerBackground.classList.remove('has-image', 'has-video');
         }
-        
+
         const footerVideo = document.getElementById('footerVideo');
         if (footerVideo) {
             footerVideo.style.display = 'none';
         }
-        
+
         if (forceSaveData()) {
             showNotification('Fond footer supprimé', 'success');
             logActivity(currentUser.username, 'Fond footer supprimé');
@@ -6254,11 +6223,11 @@ function updateAdminSettings() {
     document.getElementById('maintenanceMessage').value = siteData.settings.maintenanceMessage;
 
     document.getElementById('adminLogoPreview').src = siteData.settings.logo;
-    
+
     // Mettre à jour les valeurs des couleurs
     document.getElementById('primaryColorValue').textContent = siteData.settings.primaryColor;
     document.getElementById('secondaryColorValue').textContent = siteData.settings.secondaryColor;
-    
+
     if (siteData.brochure) {
         document.getElementById('adminBrochureInfo').innerHTML = `<i class="fas fa-file-pdf"></i> ${siteData.brochure.name}`;
     }
@@ -6295,19 +6264,19 @@ function drawSimpleChart(canvasId, type) {
         const data = [5, 8, 12, 7, 15, 10];
         const maxValue = Math.max(...data);
         const barWidth = canvas.width / data.length - 10;
-        
+
         data.forEach((value, index) => {
             const barHeight = (value / maxValue) * (canvas.height - 40);
             const x = index * (barWidth + 10) + 5;
             const y = canvas.height - barHeight - 20;
-            
+
             ctx.fillStyle = '#008fb3';
             ctx.fillRect(x, y, barWidth, barHeight);
-            
+
             ctx.fillStyle = '#64748b';
             ctx.font = '12px Inter';
             ctx.textAlign = 'center';
-            ctx.fillText(value, x + barWidth/2, y - 5);
+            ctx.fillText(value, x + barWidth / 2, y - 5);
         });
     } else if (type === 'pie') {
         const data = [
@@ -6315,22 +6284,22 @@ function drawSimpleChart(canvasId, type) {
             { label: 'CDD', value: 25, color: '#e63946' },
             { label: 'Stage', value: 15, color: '#00a896' }
         ];
-        
+
         const centerX = canvas.width / 2;
         const centerY = canvas.height / 2;
         const radius = Math.min(centerX, centerY) - 20;
-        
+
         let currentAngle = 0;
         data.forEach(segment => {
             const sliceAngle = (segment.value / 100) * 2 * Math.PI;
-            
+
             ctx.beginPath();
             ctx.moveTo(centerX, centerY);
             ctx.arc(centerX, centerY, radius, currentAngle, currentAngle + sliceAngle);
             ctx.closePath();
             ctx.fillStyle = segment.color;
             ctx.fill();
-            
+
             currentAngle += sliceAngle;
         });
     }
@@ -6379,19 +6348,19 @@ function renderAdminServices() {
                     </button>
                 </div>
             `;
-            
-            serviceItem.addEventListener('mouseenter', function() {
+
+            serviceItem.addEventListener('mouseenter', function () {
                 this.style.transform = 'translateY(-5px)';
                 this.style.boxShadow = 'var(--shadow-lg)';
                 this.style.borderColor = 'var(--primary)';
             });
-            
-            serviceItem.addEventListener('mouseleave', function() {
+
+            serviceItem.addEventListener('mouseleave', function () {
                 this.style.transform = 'translateY(0)';
                 this.style.boxShadow = 'var(--shadow-md)';
                 this.style.borderColor = 'var(--border)';
             });
-            
+
             container.appendChild(serviceItem);
         });
     }
@@ -6567,19 +6536,19 @@ function renderAdminJobs() {
                     </button>
                 </div>
             `;
-            
-            jobItem.addEventListener('mouseenter', function() {
+
+            jobItem.addEventListener('mouseenter', function () {
                 this.style.transform = 'translateY(-5px)';
                 this.style.boxShadow = 'var(--shadow-lg)';
                 this.style.borderColor = 'var(--primary)';
             });
-            
-            jobItem.addEventListener('mouseleave', function() {
+
+            jobItem.addEventListener('mouseleave', function () {
                 this.style.transform = 'translateY(0)';
                 this.style.boxShadow = 'var(--shadow-md)';
                 this.style.borderColor = 'var(--border)';
             });
-            
+
             container.appendChild(jobItem);
         });
     }
@@ -6589,13 +6558,13 @@ function renderAdminUsers() {
     const container = document.getElementById('adminUsersList');
     if (container) {
         container.innerHTML = '';
-        
+
         // Ensure users array exists
         if (!siteData.users || !Array.isArray(siteData.users)) {
             siteData.users = [];
             console.log('⚠️ [RENDER USERS] Users array not found, initializing empty array');
         }
-        
+
         // Show message if no users
         if (siteData.users.length === 0) {
             container.innerHTML = `
@@ -6607,7 +6576,7 @@ function renderAdminUsers() {
             renderAuditLog();
             return;
         }
-        
+
         siteData.users.forEach((user, index) => {
             if (user.role !== 'admin') { // Ne pas afficher l'admin dans la liste
                 const userItem = document.createElement('div');
@@ -6675,19 +6644,19 @@ function renderAdminUsers() {
                         </button>
                     </div>
                 `;
-                
-                userItem.addEventListener('mouseenter', function() {
+
+                userItem.addEventListener('mouseenter', function () {
                     this.style.transform = 'translateY(-5px)';
                     this.style.boxShadow = 'var(--shadow-lg)';
                     this.style.borderColor = 'var(--primary)';
                 });
-                
-                userItem.addEventListener('mouseleave', function() {
+
+                userItem.addEventListener('mouseleave', function () {
                     this.style.transform = 'translateY(0)';
                     this.style.boxShadow = 'var(--shadow-md)';
                     this.style.borderColor = 'var(--border)';
                 });
-                
+
                 container.appendChild(userItem);
             }
         });
@@ -6701,18 +6670,18 @@ function renderAuditLog() {
     const auditContainer = document.getElementById('adminAuditLog');
     if (auditContainer) {
         auditContainer.innerHTML = '';
-        
+
         if (siteData.activityLog && siteData.activityLog.length > 0) {
             // Filtrer selon le filtre sélectionné
             const filter = document.getElementById('auditFilter') ? document.getElementById('auditFilter').value : 'all';
             let filteredLogs = siteData.activityLog;
-            
+
             if (filter !== 'all') {
-                filteredLogs = siteData.activityLog.filter(log => 
+                filteredLogs = siteData.activityLog.filter(log =>
                     log.action.toLowerCase().includes(filter.toLowerCase())
                 );
             }
-            
+
             filteredLogs.slice(0, 50).forEach(log => {
                 const logItem = document.createElement('div');
                 logItem.style.cssText = `
@@ -6743,19 +6712,19 @@ function renderAuditLog() {
                         <div style="color: var(--text-lighter); font-size: var(--font-size-xs);">${new Date(log.timestamp).toLocaleTimeString()}</div>
                     </div>
                 `;
-                
-                logItem.addEventListener('mouseenter', function() {
+
+                logItem.addEventListener('mouseenter', function () {
                     this.style.background = 'linear-gradient(135deg, rgba(0, 86, 179, 0.08) 0%, rgba(0, 168, 150, 0.05) 100%)';
                     this.style.transform = 'translateX(5px)';
                     this.style.boxShadow = 'var(--shadow-sm)';
                 });
-                
-                logItem.addEventListener('mouseleave', function() {
+
+                logItem.addEventListener('mouseleave', function () {
                     this.style.background = 'linear-gradient(135deg, rgba(0, 86, 179, 0.03) 0%, rgba(0, 168, 150, 0.02) 100%)';
                     this.style.transform = 'translateX(0)';
                     this.style.boxShadow = 'none';
                 });
-                
+
                 auditContainer.appendChild(logItem);
             });
         } else {
@@ -6822,19 +6791,19 @@ function renderAdminPages() {
                         </button>
                     </div>
                 `;
-                
-                pageItem.addEventListener('mouseenter', function() {
+
+                pageItem.addEventListener('mouseenter', function () {
                     this.style.transform = 'translateY(-5px)';
                     this.style.boxShadow = 'var(--shadow-lg)';
                     this.style.borderColor = 'var(--primary)';
                 });
-                
-                pageItem.addEventListener('mouseleave', function() {
+
+                pageItem.addEventListener('mouseleave', function () {
                     this.style.transform = 'translateY(0)';
                     this.style.boxShadow = 'var(--shadow-md)';
                     this.style.borderColor = 'var(--border)';
                 });
-                
+
                 container.appendChild(pageItem);
             });
         } else {
@@ -7046,19 +7015,19 @@ function renderAdminCvDatabase(filterJobId = null) {
                         </button>
                     </div>
                 `;
-                
-                cvItem.addEventListener('mouseenter', function() {
+
+                cvItem.addEventListener('mouseenter', function () {
                     this.style.transform = 'translateY(-5px)';
                     this.style.boxShadow = 'var(--shadow-lg)';
                     this.style.borderColor = 'var(--primary)';
                 });
-                
-                cvItem.addEventListener('mouseleave', function() {
+
+                cvItem.addEventListener('mouseleave', function () {
                     this.style.transform = 'translateY(0)';
                     this.style.boxShadow = 'var(--shadow-md)';
                     this.style.borderColor = 'var(--border)';
                 });
-                
+
                 container.appendChild(cvItem);
             });
         } else {
@@ -7115,7 +7084,7 @@ function setupAdminForms() {
     /* FIX: Use onsubmit instead of addEventListener to prevent duplicate submissions */
     const serviceForm = document.getElementById('serviceForm');
     if (serviceForm) {
-        serviceForm.onsubmit = function(e) {
+        serviceForm.onsubmit = function (e) {
             e.preventDefault();
             const title = document.getElementById('serviceTitle').value;
             const titleEn = document.getElementById('serviceTitleEn').value || title;
@@ -7162,7 +7131,7 @@ function setupAdminForms() {
                 const file = imageInput.files[0];
                 if (file.type.startsWith('image/')) {
                     const reader = new FileReader();
-                    reader.onload = function(e) {
+                    reader.onload = function (e) {
                         processServiceData(e.target.result);
                     };
                     reader.readAsDataURL(file);
@@ -7181,7 +7150,7 @@ function setupAdminForms() {
     /* FIX: Use onsubmit instead of addEventListener to prevent duplicate submissions */
     const testimonialForm = document.getElementById('testimonialForm');
     if (testimonialForm) {
-        testimonialForm.onsubmit = function(e) {
+        testimonialForm.onsubmit = function (e) {
             e.preventDefault();
             const name = document.getElementById('testimonialName').value;
             const position = document.getElementById('testimonialPosition').value;
@@ -7189,7 +7158,7 @@ function setupAdminForms() {
             const text = document.getElementById('testimonialText').value;
             const textEn = document.getElementById('testimonialTextEn').value || text;
             const rating = document.getElementById('testimonialRating').value;
-            
+
             const testimonialData = {
                 id: currentEditingIndex >= 0 ? siteData.testimonials[currentEditingIndex].id : Date.now(),
                 name: name,
@@ -7199,7 +7168,7 @@ function setupAdminForms() {
                 avatar: 'backend/uploads/photos/logo_ae2i.png',
                 active: true
             };
-            
+
             if (currentEditingIndex >= 0) {
                 siteData.testimonials[currentEditingIndex] = { ...siteData.testimonials[currentEditingIndex], ...testimonialData };
                 logActivity(currentUser.username, `Témoignage modifié: ${name}`);
@@ -7207,16 +7176,16 @@ function setupAdminForms() {
                 siteData.testimonials.push(testimonialData);
                 logActivity(currentUser.username, `Témoignage créé: ${name}`);
             }
-            
+
             if (forceSaveData()) {
                 renderAdminTestimonials();
                 closeModal('testimonialModal');
-                showNotification(currentEditingIndex >= 0 ? 
-                    (siteData.language === 'en' ? 'Testimonial updated successfully!' : 'Témoignage modifié avec succès!') : 
+                showNotification(currentEditingIndex >= 0 ?
+                    (siteData.language === 'en' ? 'Testimonial updated successfully!' : 'Témoignage modifié avec succès!') :
                     (siteData.language === 'en' ? 'Testimonial added successfully!' : 'Témoignage ajouté avec succès!'), 'success');
-                
+
                 currentEditingIndex = -1;
-                
+
                 // Redémarrer le carrousel automatique
                 if (currentPage === 'home') {
                     executeHomeScript();
@@ -7231,7 +7200,7 @@ function setupAdminForms() {
     /* FIX: Use onsubmit instead of addEventListener to prevent duplicate submissions */
     const jobForm = document.getElementById('jobForm');
     if (jobForm) {
-        jobForm.onsubmit = function(e) {
+        jobForm.onsubmit = function (e) {
             e.preventDefault();
             const title = document.getElementById('jobTitle').value;
             const titleEn = document.getElementById('jobTitleEn').value || title;
@@ -7265,7 +7234,7 @@ function setupAdminForms() {
                     en: customQuestionEn || customQuestion
                 };
             }
-            
+
             /* FIX: Removed duplicate notification - only show one notification per action */
             if (currentEditingIndex >= 0) {
                 siteData.jobs[currentEditingIndex] = { ...siteData.jobs[currentEditingIndex], ...jobData };
@@ -7296,7 +7265,7 @@ function setupAdminForms() {
     /* FIX: Use onsubmit instead of addEventListener to prevent duplicate submissions */
     const clientForm = document.getElementById('clientForm');
     if (clientForm) {
-        clientForm.onsubmit = function(e) {
+        clientForm.onsubmit = function (e) {
             e.preventDefault();
             const name = document.getElementById('clientName').value;
             const logoInput = document.getElementById('clientLogo');
@@ -7336,7 +7305,7 @@ function setupAdminForms() {
                 const file = logoInput.files[0];
                 if (file.type.startsWith('image/')) {
                     const reader = new FileReader();
-                    reader.onload = function(e) {
+                    reader.onload = function (e) {
                         processClientData(e.target.result);
                     };
                     reader.readAsDataURL(file);
@@ -7355,17 +7324,17 @@ function setupAdminForms() {
     /* FIX: Use onsubmit instead of addEventListener to prevent duplicate submissions */
     const pageForm = document.getElementById('pageForm');
     if (pageForm) {
-        pageForm.onsubmit = function(e) {
+        pageForm.onsubmit = function (e) {
             e.preventDefault();
             const title = document.getElementById('pageTitle').value;
             const slug = document.getElementById('pageSlug').value;
             const location = document.getElementById('pageLocation').value;
-            
+
             let content = '';
             if (typeof tinymce !== 'undefined' && tinymce.get('pageContentTinyMCE')) {
                 content = tinymce.get('pageContentTinyMCE').getContent();
             }
-            
+
             const pageData = {
                 id: currentEditingIndex >= 0 ? siteData.customPages[currentEditingIndex].id : Date.now(),
                 title: title,
@@ -7377,7 +7346,7 @@ function setupAdminForms() {
                 updatedAt: new Date().toISOString(),
                 author: currentUser.username
             };
-            
+
             if (currentEditingIndex >= 0) {
                 siteData.customPages[currentEditingIndex] = { ...siteData.customPages[currentEditingIndex], ...pageData };
                 logActivity(currentUser.username, `Page modifiée: ${title}`);
@@ -7386,14 +7355,14 @@ function setupAdminForms() {
                 siteData.customPages.push(pageData);
                 logActivity(currentUser.username, `Page créée: ${title}`);
             }
-            
+
             if (forceSaveData()) {
                 renderAdminPages();
                 closeModal('pageModal');
-                showNotification(currentEditingIndex >= 0 ? 
-                    (siteData.language === 'en' ? 'Page updated successfully!' : 'Page modifiée avec succès!') : 
+                showNotification(currentEditingIndex >= 0 ?
+                    (siteData.language === 'en' ? 'Page updated successfully!' : 'Page modifiée avec succès!') :
                     (siteData.language === 'en' ? 'Page created successfully!' : 'Page créée avec succès!'), 'success');
-                
+
                 currentEditingIndex = -1;
             } else {
                 showNotification('Échec de sauvegarde de la page', 'error');
@@ -7405,7 +7374,7 @@ function setupAdminForms() {
     /* FIX: Use onsubmit instead of addEventListener to prevent duplicate submissions */
     const userForm = document.getElementById('userForm');
     if (userForm) {
-        userForm.onsubmit = async function(e) {
+        userForm.onsubmit = async function (e) {
             e.preventDefault();
 
             const submitBtn = userForm.querySelector('button[type="submit"]');
@@ -7421,7 +7390,7 @@ function setupAdminForms() {
                 const username = document.getElementById('userName').value.trim();
                 const email = document.getElementById('userEmail').value.trim().toLowerCase();
                 const roleInput = document.getElementById('userRole').value;
-            const password = document.getElementById('userPassword').value;
+                const password = document.getElementById('userPassword').value;
 
                 // Map role: recruiter -> recruteur, reader -> lecteur
                 const roleMap = {
@@ -7473,7 +7442,7 @@ function setupAdminForms() {
                         try {
                             const firestoreResult = await window.firebaseHelper.updateDocument('users', firebaseUid, {
                                 email: email,
-                username: username,
+                                username: username,
                                 role: role,
                                 updatedAt: new Date().toISOString()
                             });
@@ -7499,10 +7468,10 @@ function setupAdminForms() {
                             // Create Firestore user document
                             console.log('📝 [CREATE USER] Creating Firestore user document:', firebaseUid);
                             const firestoreResult = await window.firebaseHelper.setDocument('users', firebaseUid, {
-                email: email,
+                                email: email,
                                 username: username,
-                role: role,
-                active: true,
+                                role: role,
+                                active: true,
                                 createdAt: new Date().toISOString(),
                                 updatedAt: new Date().toISOString()
                             }, false); // false = don't merge, create new
@@ -7515,7 +7484,7 @@ function setupAdminForms() {
                             }
                         } catch (error) {
                             console.error('❌ [CREATE USER] Firebase Auth creation error:', error);
-                            
+
                             // Handle specific errors
                             if (error.code === 'auth/email-already-in-use') {
                                 showNotification('Cet email est déjà utilisé. Veuillez utiliser un autre email.', 'error');
@@ -7526,7 +7495,7 @@ function setupAdminForms() {
                             } else {
                                 showNotification(`Erreur lors de la création: ${error.message}`, 'error');
                             }
-                            
+
                             if (submitBtn) {
                                 submitBtn.disabled = false;
                                 submitBtn.textContent = originalText;
@@ -7544,8 +7513,8 @@ function setupAdminForms() {
                     role: role,
                     active: isEditing ? (siteData.users[currentEditingIndex].active !== undefined ? siteData.users[currentEditingIndex].active : true) : true,
                     createdAt: isEditing ? siteData.users[currentEditingIndex].createdAt : new Date().toISOString(),
-                updatedAt: new Date().toISOString()
-            };
+                    updatedAt: new Date().toISOString()
+                };
 
                 // Keep password only if provided (for local mode compatibility)
                 if (password) {
@@ -7562,38 +7531,38 @@ function setupAdminForms() {
 
                 // Update or add to local storage
                 if (isEditing) {
-                siteData.users[currentEditingIndex] = { ...siteData.users[currentEditingIndex], ...userData };
+                    siteData.users[currentEditingIndex] = { ...siteData.users[currentEditingIndex], ...userData };
                     logActivity(currentUser.username, `Utilisateur modifié: ${username} (${role})`);
-            } else {
+                } else {
                     if (!siteData.users) siteData.users = [];
-                siteData.users.push(userData);
-                logActivity(currentUser.username, `Utilisateur créé: ${username} (${role})`);
-            }
+                    siteData.users.push(userData);
+                    logActivity(currentUser.username, `Utilisateur créé: ${username} (${role})`);
+                }
 
                 // Save to local storage
-            if (forceSaveData()) {
-                renderAdminUsers();
-                closeModal('userModal');
-                showNotification(currentEditingIndex >= 0 ?
-                    (siteData.language === 'en' ? 'User updated successfully!' : 'Utilisateur modifié avec succès!') :
-                    (siteData.language === 'en' ? 'User created successfully!' : 'Utilisateur créé avec succès!'), 'success');
+                if (forceSaveData()) {
+                    renderAdminUsers();
+                    closeModal('userModal');
+                    showNotification(currentEditingIndex >= 0 ?
+                        (siteData.language === 'en' ? 'User updated successfully!' : 'Utilisateur modifié avec succès!') :
+                        (siteData.language === 'en' ? 'User created successfully!' : 'Utilisateur créé avec succès!'), 'success');
 
                     // Reset form
-                currentEditingIndex = -1;
+                    currentEditingIndex = -1;
                     userForm.reset();
-                    
+
                     // Reset password field requirement
                     const passwordField = document.getElementById('userPassword');
                     if (passwordField) {
                         passwordField.required = true;
                     }
-                    
+
                     // Reset submit button text
                     const submitBtn = userForm.querySelector('button[type="submit"]');
                     if (submitBtn) {
                         submitBtn.textContent = siteData.language === 'en' ? 'Save' : 'Sauvegarder';
                     }
-            } else {
+                } else {
                     showNotification('Échec de sauvegarde locale de l\'utilisateur', 'error');
                 }
             } catch (error) {
@@ -7615,22 +7584,22 @@ function setupAdminFileUploads() {
     // Logo upload avec redimensionnement automatique
     const adminLogoInput = document.getElementById('adminLogoInput');
     if (adminLogoInput) {
-        adminLogoInput.addEventListener('change', function(e) {
+        adminLogoInput.addEventListener('change', function (e) {
             const file = e.target.files[0];
             if (file && file.type.startsWith('image/')) {
                 const reader = new FileReader();
-                reader.onload = function(e) {
+                reader.onload = function (e) {
                     // Redimensionner l'image pour optimiser l'affichage
                     const img = new Image();
-                    img.onload = function() {
+                    img.onload = function () {
                         const canvas = document.createElement('canvas');
                         const ctx = canvas.getContext('2d');
-                        
+
                         // Calculer les dimensions optimales (max 150x50 pour le header)
                         const maxWidth = 150;
                         const maxHeight = 50;
                         let { width, height } = img;
-                        
+
                         if (width > maxWidth) {
                             height = (height * maxWidth) / width;
                             width = maxWidth;
@@ -7639,18 +7608,18 @@ function setupAdminFileUploads() {
                             width = (width * maxHeight) / height;
                             height = maxHeight;
                         }
-                        
+
                         canvas.width = width;
                         canvas.height = height;
                         ctx.drawImage(img, 0, 0, width, height);
-                        
+
                         const optimizedDataUrl = canvas.toDataURL('image/png', 0.9);
-                        
+
                         siteData.settings.logo = optimizedDataUrl;
                         document.getElementById('adminLogoPreview').src = optimizedDataUrl;
                         document.getElementById('headerLogo').src = optimizedDataUrl;
                         document.getElementById('footerLogo').src = optimizedDataUrl;
-                        
+
                         if (forceSaveData()) {
                             showNotification('Logo mis à jour et optimisé', 'success');
                             logActivity(currentUser.username, 'Logo modifié');
@@ -7668,7 +7637,7 @@ function setupAdminFileUploads() {
     /* FIX: Hero background upload using createObjectURL for videos to avoid heavy DataURL and multiple notifications */
     const heroBackgroundInput = document.getElementById('heroBackgroundInput');
     if (heroBackgroundInput) {
-        heroBackgroundInput.addEventListener('change', function(e) {
+        heroBackgroundInput.addEventListener('change', function (e) {
             const file = e.target.files[0];
             if (file) {
                 const heroBackground = document.getElementById('heroBackground');
@@ -7703,10 +7672,10 @@ function setupAdminFileUploads() {
                     logActivity(currentUser.username, 'Vidéo hero modifiée');
                 } else if (file.type.startsWith('image/')) {
                     const reader = new FileReader();
-                    reader.onload = function(e) {
+                    reader.onload = function (e) {
                         // Redimensionner l'image pour optimiser les performances
                         const img = new Image();
-                        img.onload = function() {
+                        img.onload = function () {
                             const canvas = document.createElement('canvas');
                             const ctx = canvas.getContext('2d');
 
@@ -7755,20 +7724,20 @@ function setupAdminFileUploads() {
     // Footer background upload avec redimensionnement
     const footerBackgroundInput = document.getElementById('footerBackgroundInput');
     if (footerBackgroundInput) {
-        footerBackgroundInput.addEventListener('change', function(e) {
+        footerBackgroundInput.addEventListener('change', function (e) {
             const file = e.target.files[0];
             if (file) {
                 const reader = new FileReader();
-                reader.onload = function(e) {
+                reader.onload = function (e) {
                     const footerBackground = document.getElementById('footerBackground');
-                    
+
                     if (file.type.startsWith('video/')) {
                         siteData.footerBackground = {
                             type: 'video',
                             url: e.target.result,
                             name: file.name
                         };
-                        
+
                         const footerVideo = document.getElementById('footerVideo');
                         const footerVideoSource = document.getElementById('footerVideoSource');
                         if (footerVideo && footerVideoSource) {
@@ -7781,37 +7750,37 @@ function setupAdminFileUploads() {
                     } else if (file.type.startsWith('image/')) {
                         // Redimensionner l'image
                         const img = new Image();
-                        img.onload = function() {
+                        img.onload = function () {
                             const canvas = document.createElement('canvas');
                             const ctx = canvas.getContext('2d');
-                            
+
                             const maxWidth = 1920;
                             let { width, height } = img;
-                            
+
                             if (width > maxWidth) {
                                 height = (height * maxWidth) / width;
                                 width = maxWidth;
                             }
-                            
+
                             canvas.width = width;
                             canvas.height = height;
                             ctx.drawImage(img, 0, 0, width, height);
-                            
+
                             const optimizedDataUrl = canvas.toDataURL('image/jpeg', 0.8);
-                            
+
                             siteData.footerBackground = {
                                 type: 'image',
                                 url: optimizedDataUrl,
                                 name: file.name
                             };
-                            
+
                             footerBackground.style.backgroundImage = `url(${optimizedDataUrl})`;
                             footerBackground.classList.add('has-image');
                             footerBackground.classList.remove('has-video');
-                            
+
                             const footerVideo = document.getElementById('footerVideo');
                             if (footerVideo) footerVideo.style.display = 'none';
-                            
+
                             if (saveSiteData()) {
                                 showNotification(siteData.language === 'en' ? 'Footer background updated and optimized' : 'Fond footer mis à jour et optimisé', 'success');
                                 logActivity(currentUser.username, 'Fond footer modifié');
@@ -7828,14 +7797,14 @@ function setupAdminFileUploads() {
     // Autres uploads (favicon, ISO, brochure, galerie)
     const adminFaviconInput = document.getElementById('adminFaviconInput');
     if (adminFaviconInput) {
-        adminFaviconInput.addEventListener('change', function(e) {
+        adminFaviconInput.addEventListener('change', function (e) {
             const file = e.target.files[0];
             if (file && file.type.startsWith('image/')) {
                 const reader = new FileReader();
-                reader.onload = function(e) {
+                reader.onload = function (e) {
                     // Créer une image pour redimensionner automatiquement
                     const img = new Image();
-                    img.onload = function() {
+                    img.onload = function () {
                         // Créer un canvas pour redimensionner l'image
                         const canvas = document.createElement('canvas');
                         const ctx = canvas.getContext('2d');
@@ -7874,11 +7843,11 @@ function setupAdminFileUploads() {
 
     const adminIsoQrInput = document.getElementById('adminIsoQrInput');
     if (adminIsoQrInput) {
-        adminIsoQrInput.addEventListener('change', function(e) {
+        adminIsoQrInput.addEventListener('change', function (e) {
             const file = e.target.files[0];
             if (file && file.type.startsWith('image/')) {
                 const reader = new FileReader();
-                reader.onload = function(e) {
+                reader.onload = function (e) {
                     siteData.isoQr = e.target.result;
 
                     /* FIX: Update all ISO QR displays */
@@ -7898,11 +7867,11 @@ function setupAdminFileUploads() {
 
     const adminIsoCertInput = document.getElementById('adminIsoCertInput');
     if (adminIsoCertInput) {
-        adminIsoCertInput.addEventListener('change', function(e) {
+        adminIsoCertInput.addEventListener('change', function (e) {
             const file = e.target.files[0];
             if (file && file.type.startsWith('image/')) {
                 const reader = new FileReader();
-                reader.onload = function(e) {
+                reader.onload = function (e) {
                     siteData.isoCert = e.target.result;
 
                     /* FIX: Update all ISO certificate displays */
@@ -7922,23 +7891,23 @@ function setupAdminFileUploads() {
 
     const adminBrochureInput = document.getElementById('adminBrochureInput');
     if (adminBrochureInput) {
-        adminBrochureInput.addEventListener('change', function(e) {
+        adminBrochureInput.addEventListener('change', function (e) {
             const file = e.target.files[0];
             if (file) {
                 const reader = new FileReader();
-                reader.onload = function(e) {
+                reader.onload = function (e) {
                     siteData.brochure = {
                         name: file.name,
                         type: file.type,
                         url: e.target.result,
                         uploadedAt: new Date().toISOString()
                     };
-                    
+
                     const brochureInfo = document.getElementById('adminBrochureInfo');
                     if (brochureInfo) {
                         brochureInfo.innerHTML = `<i class="fas fa-file-pdf"></i> ${file.name}`;
                     }
-                    
+
                     if (saveSiteData()) {
                         showNotification('Brochure mise à jour', 'success');
                         logActivity(currentUser.username, 'Brochure mise à jour');
@@ -7951,14 +7920,14 @@ function setupAdminFileUploads() {
 
     const adminGalleryInput = document.getElementById('adminGalleryInput');
     if (adminGalleryInput) {
-        adminGalleryInput.addEventListener('change', function(e) {
+        adminGalleryInput.addEventListener('change', function (e) {
             const files = Array.from(e.target.files);
             if (!siteData.gallery) siteData.gallery = [];
-            
+
             files.forEach(file => {
                 if (file.type.startsWith('image/')) {
                     const reader = new FileReader();
-                    reader.onload = function(e) {
+                    reader.onload = function (e) {
                         siteData.gallery.push({
                             id: Date.now() + Math.random(),
                             name: file.name,
@@ -7970,7 +7939,7 @@ function setupAdminFileUploads() {
                     reader.readAsDataURL(file);
                 }
             });
-            
+
             showNotification(`${files.length} image(s) ajoutée(s) à la galerie`, 'success');
             logActivity(currentUser.username, `${files.length} images ajoutées à la galerie`);
         });
@@ -7979,15 +7948,15 @@ function setupAdminFileUploads() {
     // Restore backup
     const restoreInput = document.getElementById('restoreInput');
     if (restoreInput) {
-        restoreInput.addEventListener('change', function(e) {
+        restoreInput.addEventListener('change', function (e) {
             const file = e.target.files[0];
             if (file && file.type === 'application/json') {
                 const reader = new FileReader();
-                reader.onload = function(e) {
+                reader.onload = function (e) {
                     try {
                         const backupData = JSON.parse(e.target.result);
                         siteData = { ...siteData, ...backupData };
-                        
+
                         if (saveSiteData()) {
                             showNotification('Sauvegarde restaurée avec succès', 'success');
                             logActivity(currentUser.username, 'Sauvegarde restaurée');
@@ -8012,22 +7981,22 @@ function setupAdminFileUploads() {
 }
 
 // CRUD Functions OPÉRATIONNELLES
-function openServiceModal() { 
+function openServiceModal() {
     currentEditingIndex = -1;
     currentEditingType = 'service';
-    openModal('serviceModal'); 
+    openModal('serviceModal');
 }
 
-function openClientModal() { 
+function openClientModal() {
     currentEditingIndex = -1;
     currentEditingType = 'client';
-    openModal('clientModal'); 
+    openModal('clientModal');
 }
 
-function openTestimonialModal() { 
+function openTestimonialModal() {
     currentEditingIndex = -1;
     currentEditingType = 'testimonial';
-    openModal('testimonialModal'); 
+    openModal('testimonialModal');
 }
 
 function openJobModal() {
@@ -8039,27 +8008,27 @@ function openJobModal() {
     openModal('jobModal');
 }
 
-function openPageModal() { 
+function openPageModal() {
     currentEditingIndex = -1;
     currentEditingType = 'page';
     openModal('pageModal');
-    
+
     // Réinitialiser TinyMCE
     if (typeof tinymce !== 'undefined' && tinymce.get('pageContentTinyMCE')) {
         tinymce.get('pageContentTinyMCE').setContent('<h1>Nouvelle Page</h1><p>Contenu de votre nouvelle page...</p>');
     }
 }
 
-function openUserModal() { 
+function openUserModal() {
     currentEditingIndex = -1;
     currentEditingType = 'user';
-    openModal('userModal'); 
+    openModal('userModal');
 }
 
 function updateRoleDescription() {
     const roleSelect = document.getElementById('userRole');
     const descriptionDiv = document.getElementById('roleDescription');
-    
+
     if (roleSelect && descriptionDiv) {
         const selectedRole = roleSelect.value;
         if (selectedRole && roleDescriptions[siteData.language][selectedRole]) {
@@ -8318,7 +8287,7 @@ function toggleTestimonial(index) {
         renderAdminTestimonials();
         showNotification('Témoignage mis à jour', 'success');
         logActivity(currentUser.username, `Témoignage ${siteData.testimonials[index].active ? 'activé' : 'désactivé'}: ${siteData.testimonials[index].name}`);
-        
+
         // Redémarrer le carrousel automatique
         if (currentPage === 'home') {
             executeHomeScript();
@@ -8331,7 +8300,7 @@ async function deleteTestimonial(index) {
         const testimonial = siteData.testimonials[index];
         const testimonialId = testimonial.id.toString();
         siteData.testimonials.splice(index, 1);
-        
+
         // Delete from Firestore
         if (typeof APP_MODE !== 'undefined' && APP_MODE === 'FIREBASE' && typeof window.firebaseHelper !== 'undefined') {
             try {
@@ -8341,12 +8310,12 @@ async function deleteTestimonial(index) {
                 console.error(`❌ [ADMIN FIREBASE DELETE] Error deleting testimonial ${testimonialId}:`, error);
             }
         }
-        
+
         if (saveSiteData()) {
             renderAdminTestimonials();
             showNotification('Témoignage supprimé', 'success');
             logActivity(currentUser.username, `Témoignage supprimé: ${testimonial.name}`);
-            
+
             // Redémarrer le carrousel automatique
             if (currentPage === 'home') {
                 executeHomeScript();
@@ -8400,7 +8369,7 @@ function editUser(index) {
     currentEditingType = 'user';
     document.getElementById('userName').value = user.username || '';
     document.getElementById('userEmail').value = user.email || '';
-    
+
     // Map role back for form display: recruteur -> recruiter, lecteur -> reader
     const roleMap = {
         'recruteur': 'recruiter',
@@ -8410,16 +8379,16 @@ function editUser(index) {
     };
     const formRole = roleMap[user.role] || user.role || '';
     document.getElementById('userRole').value = formRole;
-    
+
     document.getElementById('userPassword').value = ''; // Ne pas pré-remplir le mot de passe
     document.getElementById('userPassword').required = false; // Make password optional when editing
-    
+
     // Update submit button text
     const submitBtn = document.querySelector('#userForm button[type="submit"]');
     if (submitBtn) {
         submitBtn.textContent = siteData.language === 'en' ? 'Update User' : 'Modifier l\'utilisateur';
     }
-    
+
     updateRoleDescription();
     openModal('userModal');
 }
@@ -8460,12 +8429,12 @@ function editPage(index) {
     document.getElementById('pageTitle').value = page.title;
     document.getElementById('pageSlug').value = page.slug;
     document.getElementById('pageLocation').value = page.location || 'main';
-    
+
     // Charger le contenu dans TinyMCE
     if (typeof tinymce !== 'undefined' && tinymce.get('pageContentTinyMCE')) {
         tinymce.get('pageContentTinyMCE').setContent(page.content);
     }
-    
+
     openModal('pageModal');
 }
 
@@ -8485,7 +8454,7 @@ function duplicatePage(index) {
         createdAt: new Date().toISOString(),
         author: currentUser.username
     };
-    
+
     siteData.customPages.push(duplicatedPage);
     if (saveSiteData()) {
         renderAdminPages();
@@ -8499,7 +8468,7 @@ async function deletePage(index) {
         const page = siteData.customPages[index];
         const pageId = page.id.toString();
         siteData.customPages.splice(index, 1);
-        
+
         // Delete from Firestore
         if (typeof APP_MODE !== 'undefined' && APP_MODE === 'FIREBASE' && typeof window.firebaseHelper !== 'undefined') {
             try {
@@ -8509,7 +8478,7 @@ async function deletePage(index) {
                 console.error(`❌ [ADMIN FIREBASE DELETE] Error deleting page ${pageId}:`, error);
             }
         }
-        
+
         if (saveSiteData()) {
             renderAdminPages();
             showNotification('Page supprimée', 'success');
@@ -8518,21 +8487,45 @@ async function deletePage(index) {
     }
 }
 
-function previewCV(cvId) {
+function printCV(cvId) {
     const cv = siteData.cvDatabase.find(c => c.id === cvId);
+    if (!cv) return;
+
+    // Prioritize R2 URL now that bucket is public
+    const fileContent = cv.cvR2Url || cv.cvUrl || cv.applicantCV?.content;
+    if (!fileContent) {
+        showNotification('Impossible d\'imprimer : fichier non trouvé', 'error');
+        return;
+    }
+
+    const printWindow = window.open('', '_blank');
+    printWindow.document.write(`
+        <html>
+            <head><title>Imprimer CV - ${cv.applicantName}</title></head>
+            <body style="margin:0; padding:0; overflow:hidden;">
+                <iframe src="${fileContent}" style="width:100vw; height:100vh; border:none;" onload="setTimeout(() => { window.print(); }, 1000);"></iframe>
+            </body>
+        </html>
+    `);
+    printWindow.document.close();
+}
+
+function previewCV(cvId) {
+    const cv = siteData.cvDatabase.find(c => c.id == cvId);
     if (!cv) {
         showNotification('CV non trouvé', 'error');
         return;
     }
-    
-    // Priorité: URL R2 > cvUrl > applicantCV content
+
+    // Priorité: URL R2 > cvUrl > applicantCV content (R2 is now public)
     const cvUrl = cv.cvR2Url || cv.cvUrl || null;
+    const cvContent = cvUrl || cv.applicantCV?.content;
     const cvFileName = cv.cvFileName || cv.applicantCV?.name || 'CV.pdf';
     const cvFileSize = cv.cvFileSize || cv.applicantCV?.size || 0;
-    
+
     let cvPreviewSection = '';
-    if (cvUrl) {
-        // Afficher le CV depuis R2 dans un iframe
+
+    if (cvContent) {
         cvPreviewSection = `
             <div style="margin-top: 24px;">
                 <h4 style="color: var(--primary); font-weight: 700; margin-bottom: 16px;">
@@ -8541,35 +8534,17 @@ function previewCV(cvId) {
                 </h4>
                 <div style="background: var(--bg-alt); padding: 16px; border-radius: var(--border-radius-lg); margin-top: 12px; border: 2px solid var(--border);">
                     <div style="display: flex; gap: 12px; margin-bottom: 12px; flex-wrap: wrap;">
-                        <button class="btn btn-sm btn-primary functional-btn" onclick="openCVViewer('${cvUrl}', '${cv.applicantName}')">
+                        <button class="btn btn-sm btn-primary functional-btn" onclick="openCVViewer('${cvContent}', '${cv.applicantName}')">
                             <i class="fas fa-expand"></i> Ouvrir en plein écran
                         </button>
                         <button class="btn btn-sm btn-success functional-btn" onclick="downloadCV(${cv.id})">
                             <i class="fas fa-download"></i> Télécharger
                         </button>
-                        <button class="btn btn-sm btn-accent functional-btn" onclick="window.open('${cvUrl}', '_blank').print()">
+                        <button class="btn btn-sm btn-accent functional-btn" onclick="printCV(${cv.id})">
                             <i class="fas fa-print"></i> Imprimer
                         </button>
                     </div>
-                    <iframe src="${cvUrl}" style="width: 100%; height: 600px; border: 1px solid var(--border); border-radius: var(--border-radius);"></iframe>
-                </div>
-            </div>
-        `;
-    } else if (cv.applicantCV && cv.applicantCV.content) {
-        // Fallback: afficher depuis base64
-        cvPreviewSection = `
-            <div style="margin-top: 24px;">
-                <h4 style="color: var(--primary); font-weight: 700; margin-bottom: 16px;">
-                    <i class="fas fa-file-pdf"></i> CV: ${cvFileName}
-                    ${cvFileSize ? `<span style="font-size: var(--font-size-sm); color: var(--text-light); font-weight: normal;">(${(cvFileSize / 1024).toFixed(1)} KB)</span>` : ''}
-                </h4>
-                <div style="background: var(--bg-alt); padding: 16px; border-radius: var(--border-radius-lg); margin-top: 12px; border: 2px solid var(--border);">
-                    <div style="display: flex; gap: 12px; margin-bottom: 12px; flex-wrap: wrap;">
-                        <button class="btn btn-sm btn-success functional-btn" onclick="downloadCV(${cv.id})">
-                            <i class="fas fa-download"></i> Télécharger
-                        </button>
-                    </div>
-                    <iframe src="${cv.applicantCV.content}" style="width: 100%; height: 600px; border: 1px solid var(--border); border-radius: var(--border-radius);"></iframe>
+                    <iframe src="${cvContent}" style="width: 100%; height: 600px; border: 1px solid var(--border); border-radius: var(--border-radius);"></iframe>
                 </div>
             </div>
         `;
@@ -8584,29 +8559,29 @@ function previewCV(cvId) {
             </div>
         `;
     }
-    
-        document.getElementById('cvPreviewContent').innerHTML = `
-            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-bottom: 24px;">
-                <div>
-                <h3 style="color: var(--primary); font-weight: 800; margin-bottom: 20px; font-size: var(--font-size-2xl);">${cv.applicantName || (cv.applicantFirstName + ' ' + cv.applicantLastName) || 'Candidat'}</h3>
-                <p><strong>Email:</strong> ${cv.applicantEmail || cv.email || 'Non renseigné'}</p>
-                <p><strong>Téléphone:</strong> ${cv.applicantPhone || cv.phone || 'Non renseigné'}</p>
-                    ${cv.applicantPosition ? `<p><strong>Poste actuel:</strong> ${cv.applicantPosition}</p>` : ''}
-                    ${cv.expectedSalary ? `<p><strong>Salaire souhaité:</strong> ${cv.expectedSalary} DA</p>` : ''}
-                </div>
-                <div>
-                    <p><strong>Poste:</strong> <span style="color: var(--primary); font-weight: 600;">${cv.jobTitle}</span></p>
-                <p><strong>Date:</strong> ${new Date(cv.appliedAt || cv.submittedAt).toLocaleDateString()}</p>
-                    <p><strong>Statut:</strong> <span class="status-badge ${cv.processed ? 'status-processed' : 'status-pending'}">${cv.processed ? 'Traité' : 'En attente'}</span></p>
-                    ${cv.processedBy ? `<p><strong>Traité par:</strong> ${cv.processedBy}</p>` : ''}
-                    ${cv.currentlyEmployed ? `<p><strong>En poste:</strong> ${cv.currentlyEmployed === 'yes' ? 'Oui' : 'Non'}</p>` : ''}
-                    ${cv.lastJobDate ? `<p><strong>Dernier poste:</strong> ${cv.lastJobDate}</p>` : ''}
-                    ${cv.lastContractType ? `<p><strong>Type contrat:</strong> ${cv.lastContractType}</p>` : ''}
-                </div>
+
+    document.getElementById('cvPreviewContent').innerHTML = `
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-bottom: 24px;">
+            <div>
+            <h3 style="color: var(--primary); font-weight: 800; margin-bottom: 20px; font-size: var(--font-size-2xl);">${cv.applicantName || (cv.applicantFirstName + ' ' + cv.applicantLastName) || 'Candidat'}</h3>
+            <p><strong>Email:</strong> ${cv.applicantEmail || cv.email || 'Non renseigné'}</p>
+            <p><strong>Téléphone:</strong> ${cv.applicantPhone || cv.phone || 'Non renseigné'}</p>
+                ${cv.applicantPosition ? `<p><strong>Poste actuel:</strong> ${cv.applicantPosition}</p>` : ''}
+                ${cv.expectedSalary ? `<p><strong>Salaire souhaité:</strong> ${cv.expectedSalary} DA</p>` : ''}
             </div>
+            <div>
+                <p><strong>Poste:</strong> <span style="color: var(--primary); font-weight: 600;">${cv.jobTitle}</span></p>
+            <p><strong>Date:</strong> ${new Date(cv.appliedAt || cv.submittedAt).toLocaleDateString()}</p>
+                <p><strong>Statut:</strong> <span class="status-badge ${cv.processed ? 'status-processed' : 'status-pending'}">${cv.processed ? 'Traité' : 'En attente'}</span></p>
+                ${cv.processedBy ? `<p><strong>Traité par:</strong> ${cv.processedBy}</p>` : ''}
+                ${cv.currentlyEmployed ? `<p><strong>En poste:</strong> ${cv.currentlyEmployed === 'yes' ? 'Oui' : 'Non'}</p>` : ''}
+                ${cv.lastJobDate ? `<p><strong>Dernier poste:</strong> ${cv.lastJobDate}</p>` : ''}
+                ${cv.lastContractType ? `<p><strong>Type contrat:</strong> ${cv.lastContractType}</p>` : ''}
+            </div>
+        </div>
         ${cvPreviewSection}
-        `;
-        openModal('cvPreviewModal');
+    `;
+    openModal('cvPreviewModal');
 }
 
 function contactApplicant(email) {
@@ -8617,12 +8592,12 @@ function contactApplicant(email) {
 function markAsProcessed(cvId) {
     // Try to find by id (number or string match)
     let cv = siteData.cvDatabase.find(c => c.id === cvId || c.id == cvId || String(c.id) === String(cvId));
-    
+
     // If not found, try to find by applicantEmail as fallback
     if (!cv && typeof cvId === 'string') {
         cv = siteData.cvDatabase.find(c => c.applicantEmail === cvId);
     }
-    
+
     if (cv) {
         cv.processed = true;
         cv.processedAt = new Date().toISOString();
@@ -8639,20 +8614,20 @@ function markAsProcessed(cvId) {
 function downloadCV(cvId) {
     // Try to find by id (number or string match)
     let cv = siteData.cvDatabase.find(c => c.id === cvId || c.id == cvId || String(c.id) === String(cvId));
-    
+
     // If not found, try to find by applicantEmail as fallback
     if (!cv && typeof cvId === 'string') {
         cv = siteData.cvDatabase.find(c => c.applicantEmail === cvId);
     }
-    
+
     if (!cv) {
         showNotification('CV non trouvé', 'error');
         return;
     }
-    
-    // Priorité: URL R2 > cvUrl > applicantCV content
+
+    // Priorité: URL R2 > cvUrl > applicantCV content (R2 is now public)
     const cvUrl = cv.cvR2Url || cv.cvUrl || null;
-    
+
     if (cvUrl) {
         // Télécharger depuis R2 ou URL directe
         const link = document.createElement('a');
@@ -8668,7 +8643,7 @@ function downloadCV(cvId) {
         // Fallback: télécharger depuis base64
         const link = document.createElement('a');
         link.href = cv.applicantCV.content;
-        link.download = cv.applicantCV.name || `${cv.applicantName}_CV.pdf`;
+        link.download = cv.cvFileName || cv.applicantCV?.name || `${cv.applicantName}_CV.pdf`;
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
@@ -8683,23 +8658,23 @@ async function deleteApplication(cvId) {
     if (!confirm('Supprimer cette candidature? Cette action est irréversible.')) {
         return;
     }
-    
+
     // Try to find by id (number or string match)
     let cv = siteData.cvDatabase.find(c => c.id === cvId || c.id == cvId || String(c.id) === String(cvId));
-    
+
     // If not found, try to find by applicantEmail as fallback
     if (!cv && typeof cvId === 'string') {
         cv = siteData.cvDatabase.find(c => c.applicantEmail === cvId);
     }
-    
+
     if (!cv) {
         showNotification('Candidature non trouvée', 'error');
         return;
     }
-    
+
     const cvName = cv.applicantName || 'Candidat';
     const firebaseId = cv.firebaseId || cv.id;
-    
+
     // Delete from Firebase if in Firebase mode
     if (APP_MODE === 'FIREBASE' && window.firebaseHelper && firebaseId) {
         try {
@@ -8716,20 +8691,20 @@ async function deleteApplication(cvId) {
             // Continue with local delete even if Firebase fails
         }
     }
-    
+
     // Delete from local database
-    const cvIndex = siteData.cvDatabase.findIndex(c => 
+    const cvIndex = siteData.cvDatabase.findIndex(c =>
         c.id === cvId || c.id == cvId || String(c.id) === String(cvId) || c.firebaseId === firebaseId
     );
-    
-        if (cvIndex >= 0) {
-            siteData.cvDatabase.splice(cvIndex, 1);
-            if (saveSiteData()) {
-                renderAdminCvDatabase();
+
+    if (cvIndex >= 0) {
+        siteData.cvDatabase.splice(cvIndex, 1);
+        if (saveSiteData()) {
+            renderAdminCvDatabase();
             if (typeof renderRecruteurApplications === 'function') renderRecruteurApplications();
             if (typeof renderLecteurCvDatabase === 'function') renderLecteurCvDatabase();
             if (typeof populateCVJobFilter === 'function') populateCVJobFilter();
-                showNotification('Candidature supprimée', 'success');
+            showNotification('Candidature supprimée', 'success');
             logActivity(currentUser.username, `Candidature supprimée: ${cvName}`);
         }
     }
@@ -8767,7 +8742,7 @@ function exportCVDatabase(format) {
         siteData.cvDatabase.forEach(cv => {
             csv += `"${cv.applicantName}","${cv.applicantEmail}","${cv.applicantPhone || ''}","${cv.jobTitle}","${new Date(cv.appliedAt).toLocaleDateString()}","${cv.processed ? 'Traité' : 'En attente'}","${cv.processedBy || ''}","${cv.expectedSalary || ''}","${cv.currentlyEmployed || ''}","${cv.lastJobDate || ''}","${cv.lastContractType || ''}"\n`;
         });
-        
+
         const csvBlob = new Blob([csv], { type: 'text/csv' });
         const link = document.createElement('a');
         link.href = URL.createObjectURL(csvBlob);
@@ -8776,13 +8751,13 @@ function exportCVDatabase(format) {
     } else {
         const dataStr = JSON.stringify(siteData.cvDatabase, null, 2);
         const dataBlob = new Blob([dataStr], { type: 'application/json' });
-        
+
         const link = document.createElement('a');
         link.href = URL.createObjectURL(dataBlob);
         link.download = `ae2i_cv_database_${new Date().toISOString().split('T')[0]}.json`;
         link.click();
     }
-    
+
     showNotification(`Base de données CV exportée (${format.toUpperCase()})`, 'success');
     logActivity(currentUser.username, `Base de données CV exportée (${format})`);
 }
@@ -8792,14 +8767,14 @@ function updateSiteInfo() {
     siteData.settings.title = document.getElementById('siteTitle').value;
     siteData.settings.slogan = document.getElementById('siteSlogan').value;
     siteData.settings.description = document.getElementById('siteDescription').value;
-    
+
     // Mettre à jour le titre de la page
     document.title = siteData.settings.title;
-    
+
     // Mettre à jour les éléments de la page
     document.getElementById('heroTitle').textContent = siteData.settings.title;
     document.getElementById('heroSubtitle').textContent = siteData.settings.slogan;
-    
+
     if (saveSiteData()) {
         showNotification('Informations du site mises à jour', 'success');
         logActivity(currentUser.username, 'Informations du site modifiées');
@@ -8809,7 +8784,7 @@ function updateSiteInfo() {
 function updateLanguageSettings() {
     siteData.settings.defaultLanguage = document.getElementById('defaultLanguage').value;
     siteData.settings.enableMultilingual = document.getElementById('enableMultilingual').checked;
-    
+
     if (saveSiteData()) {
         showNotification('Paramètres de langue mis à jour', 'success');
         logActivity(currentUser.username, 'Paramètres de langue modifiés');
@@ -8868,13 +8843,13 @@ function updateAdminProfile() {
         const newName = document.getElementById('adminName').value;
         const newEmail = document.getElementById('adminEmail').value;
         const newPassword = document.getElementById('adminPassword').value;
-        
+
         adminUser.username = newName;
         adminUser.email = newEmail;
         if (newPassword) {
             adminUser.password = newPassword;
         }
-        
+
         if (saveSiteData()) {
             showNotification('Profil administrateur mis à jour', 'success');
             logActivity(currentUser.username, 'Profil administrateur modifié');
@@ -8897,15 +8872,15 @@ function createBackup() {
         version: '1.0',
         data: siteData
     };
-    
+
     const dataStr = JSON.stringify(backup, null, 2);
     const dataBlob = new Blob([dataStr], { type: 'application/json' });
-    
+
     const link = document.createElement('a');
     link.href = URL.createObjectURL(dataBlob);
     link.download = `ae2i_backup_${new Date().toISOString().split('T')[0]}.json`;
     link.click();
-    
+
     showNotification('Sauvegarde créée et téléchargée', 'success');
     logActivity(currentUser.username, 'Sauvegarde créée');
 }
@@ -8922,20 +8897,20 @@ function clearCache() {
 
 function runPerformanceCheck() {
     const startTime = performance.now();
-    
+
     // Simuler une analyse de performance
     setTimeout(() => {
         const endTime = performance.now();
         const loadTime = endTime - startTime;
-        
+
         document.getElementById('loadTime').textContent = `${loadTime.toFixed(2)}ms`;
-        
+
         // Simuler l'utilisation mémoire
         if (performance.memory) {
             const memoryMB = (performance.memory.usedJSHeapSize / 1024 / 1024).toFixed(2);
             document.getElementById('memoryUsage').textContent = `${memoryMB} MB`;
         }
-        
+
         showNotification('Analyse de performance terminée', 'success');
         logActivity(currentUser.username, 'Analyse de performance effectuée');
     }, 500);
@@ -8971,15 +8946,15 @@ function generateGlobalReport() {
             declined: siteData.consentLogs ? siteData.consentLogs.filter(log => log.action === 'declined').length : 0
         }
     };
-    
+
     const reportStr = JSON.stringify(report, null, 2);
     const reportBlob = new Blob([reportStr], { type: 'application/json' });
-    
+
     const link = document.createElement('a');
     link.href = URL.createObjectURL(reportBlob);
     link.download = `ae2i_rapport_${new Date().toISOString().split('T')[0]}.json`;
     link.click();
-    
+
     showNotification('Rapport global généré', 'success');
     logActivity(currentUser.username, 'Rapport global généré');
 }
@@ -8992,7 +8967,7 @@ function exportAnalytics(format) {
         applications: siteData.cvDatabase,
         activityLog: siteData.activityLog
     };
-    
+
     if (format === 'csv') {
         // Conversion simple en CSV pour les candidatures
         let csv = 'Nom,Email,Poste,Date,Statut,Salaire souhaité,En poste,Dernier poste,Type contrat\n';
@@ -9001,7 +8976,7 @@ function exportAnalytics(format) {
                 csv += `"${cv.applicantName}","${cv.applicantEmail}","${cv.jobTitle}","${new Date(cv.appliedAt).toLocaleDateString()}","${cv.processed ? 'Traité' : 'En attente'}","${cv.expectedSalary || ''}","${cv.currentlyEmployed || ''}","${cv.lastJobDate || ''}","${cv.lastContractType || ''}"\n`;
             });
         }
-        
+
         const csvBlob = new Blob([csv], { type: 'text/csv' });
         const link = document.createElement('a');
         link.href = URL.createObjectURL(csvBlob);
@@ -9010,26 +8985,26 @@ function exportAnalytics(format) {
     } else {
         const dataStr = JSON.stringify(data, null, 2);
         const dataBlob = new Blob([dataStr], { type: 'application/json' });
-        
+
         const link = document.createElement('a');
         link.href = URL.createObjectURL(dataBlob);
         link.download = `ae2i_analytics_${new Date().toISOString().split('T')[0]}.json`;
         link.click();
     }
-    
+
     showNotification(`Analytics exportées (${format.toUpperCase()})`, 'success');
     logActivity(currentUser.username, `Analytics exportées (${format})`);
 }
 
 function exportConsentData(format) {
     const consentData = siteData.consentLogs || [];
-    
+
     if (format === 'csv') {
         let csv = 'Action,Date,Détails\n';
         consentData.forEach(log => {
             csv += `"${log.action}","${new Date(log.timestamp).toLocaleDateString()}","${JSON.stringify(log.details).replace(/"/g, '""')}"\n`;
         });
-        
+
         const csvBlob = new Blob([csv], { type: 'text/csv' });
         const link = document.createElement('a');
         link.href = URL.createObjectURL(csvBlob);
@@ -9038,31 +9013,31 @@ function exportConsentData(format) {
     } else {
         const dataStr = JSON.stringify(consentData, null, 2);
         const dataBlob = new Blob([dataStr], { type: 'application/json' });
-        
+
         const link = document.createElement('a');
         link.href = URL.createObjectURL(dataBlob);
         link.download = `ae2i_consent_${new Date().toISOString().split('T')[0]}.json`;
         link.click();
     }
-    
+
     showNotification(`Données de consentement exportées (${format.toUpperCase()})`, 'success');
     logActivity(currentUser.username, `Données de consentement exportées (${format})`);
 }
 
 function exportAuditLog() {
     const auditData = siteData.activityLog || [];
-    
+
     let csv = 'Utilisateur,Action,Page,Date,Rôle\n';
     auditData.forEach(log => {
         csv += `"${log.username}","${log.action}","${log.page || ''}","${new Date(log.timestamp).toLocaleDateString()}","${log.userRole}"\n`;
     });
-    
+
     const csvBlob = new Blob([csv], { type: 'text/csv' });
     const link = document.createElement('a');
     link.href = URL.createObjectURL(csvBlob);
     link.download = `ae2i_audit_${new Date().toISOString().split('T')[0]}.csv`;
     link.click();
-    
+
     showNotification('Journal d\'audit exporté', 'success');
     logActivity(currentUser.username, 'Journal d\'audit exporté');
 }
@@ -9070,9 +9045,9 @@ function anonymizeOldData() {
     if (confirm('Anonymiser les données de plus de 2 ans? Cette action est irréversible.')) {
         const twoYearsAgo = new Date();
         twoYearsAgo.setFullYear(twoYearsAgo.getFullYear() - 2);
-        
+
         let anonymizedCount = 0;
-        
+
         // Anonymiser les candidatures anciennes
         if (siteData.cvDatabase) {
             siteData.cvDatabase.forEach(cv => {
@@ -9086,7 +9061,7 @@ function anonymizeOldData() {
                 }
             });
         }
-        
+
         // Anonymiser les logs anciens
         if (siteData.activityLog) {
             siteData.activityLog.forEach(log => {
@@ -9097,7 +9072,7 @@ function anonymizeOldData() {
                 }
             });
         }
-        
+
         if (saveSiteData()) {
             showNotification(`${anonymizedCount} entrée(s) anonymisée(s)`, 'success');
             logActivity(currentUser.username, `${anonymizedCount} données anonymisées (conformité Loi 18-07)`);
@@ -9107,7 +9082,7 @@ function anonymizeOldData() {
 
 function executeRecruteurScript() {
     console.log('👥 Executing recruteur dashboard script');
-    
+
     // Load candidatures from Firebase if in Firebase mode
     if (APP_MODE === 'FIREBASE' && window.firebaseHelper) {
         loadCandidaturesFromFirebase().then(() => {
@@ -9119,41 +9094,41 @@ function executeRecruteurScript() {
             setupRecruteurInteractions();
         });
     } else {
-    renderRecruteurContent();
-    setupRecruteurInteractions();
+        renderRecruteurContent();
+        setupRecruteurInteractions();
     }
 }
 
 // Load candidatures from Firebase
 async function loadCandidaturesFromFirebase() {
     if (!window.firebaseHelper) return;
-    
+
     try {
         console.log('📡 Loading candidatures from Firebase...');
         const result = await window.firebaseHelper.getCollection('cvDatabase');
-        
+
         if (result.success && result.data) {
             const normalized = result.data.map(doc => {
                 const d = { id: doc.id, ...doc };
-                
+
                 // Normalize timestamps
                 if (d.submittedAt && d.submittedAt.toDate) {
-                    try { d.appliedAt = d.submittedAt.toDate().toISOString(); } catch(e){}
+                    try { d.appliedAt = d.submittedAt.toDate().toISOString(); } catch (e) { }
                 } else if (d.submittedAt) {
                     d.appliedAt = (new Date(d.submittedAt)).toISOString();
                 } else if (!d.appliedAt) {
                     d.appliedAt = new Date().toISOString();
                 }
-                
+
                 // Normalize field names
                 if (!d.applicantName) {
-                    d.applicantName = d.fullName || d.cvData?.fullName || d.applicantFullName || 
+                    d.applicantName = d.fullName || d.cvData?.fullName || d.applicantFullName ||
                         ((d.applicantFirstName || '') + ' ' + (d.applicantLastName || '')).trim() || 'Candidat';
                 }
                 if (!d.jobTitle) {
                     d.jobTitle = d.position || d.job || d.cvData?.position || d.jobTitle || 'Poste';
                 }
-                
+
                 // Ensure all required fields exist
                 if (!d.applicantEmail && d.email) {
                     d.applicantEmail = d.email;
@@ -9170,7 +9145,7 @@ async function loadCandidaturesFromFirebase() {
                 if (!d.jobId && d.job_id) {
                     d.jobId = d.job_id;
                 }
-                
+
                 // Map CV URLs
                 if (!d.cvR2Url && d.cvUrl) {
                     d.cvR2Url = d.cvUrl;
@@ -9178,11 +9153,11 @@ async function loadCandidaturesFromFirebase() {
                 if (!d.cvUrl && d.cvR2Url) {
                     d.cvUrl = d.cvR2Url;
                 }
-                
+
                 d.processed = !!d.processed;
                 return d;
             });
-            
+
             siteData.cvDatabase = normalized;
             console.log('✅ Loaded', normalized.length, 'candidatures from Firebase');
             console.log('📋 Candidatures:', normalized.map(c => ({ id: c.id, name: c.applicantName, jobId: c.jobId, jobTitle: c.jobTitle })));
@@ -9196,11 +9171,11 @@ function renderRecruteurContent() {
     // Update recruiter stats - Show ALL candidatures (not just recruiter's jobs)
     const myJobs = siteData.jobs.filter(j => j.createdBy === currentUser.username);
     const allApplications = siteData.cvDatabase || [];
-    
+
     console.log('📊 [RECRUTEUR] My jobs:', myJobs.length, myJobs.map(j => ({ id: j.id, title: j.title.fr })));
     console.log('📊 [RECRUTEUR] All candidatures:', allApplications.length);
     console.log('📊 [RECRUTEUR] All candidatures details:', allApplications.map(c => ({ id: c.id, name: c.applicantName, jobId: c.jobId, jobTitle: c.jobTitle })));
-    
+
     document.getElementById('recruteurMyJobs').textContent = myJobs.length;
     document.getElementById('recruteurApplications').textContent = allApplications.length;
     document.getElementById('recruteurProcessed').textContent = allApplications.filter(cv => cv.processed).length;
@@ -9261,19 +9236,19 @@ function renderRecruteurContent() {
                     </button>
                 </div>
             `;
-            
-            jobItem.addEventListener('mouseenter', function() {
+
+            jobItem.addEventListener('mouseenter', function () {
                 this.style.transform = 'translateY(-3px)';
                 this.style.boxShadow = 'var(--shadow-lg)';
                 this.style.borderColor = 'var(--accent)';
             });
-            
-            jobItem.addEventListener('mouseleave', function() {
+
+            jobItem.addEventListener('mouseleave', function () {
                 this.style.transform = 'translateY(0)';
                 this.style.boxShadow = 'var(--shadow-md)';
                 this.style.borderColor = 'var(--border)';
             });
-            
+
             jobsList.appendChild(jobItem);
         });
 
@@ -9294,25 +9269,25 @@ function renderRecruteurApplications() {
 
         // Use new advanced filtering function
         const allFiltered = getRecruteurFilteredCandidates();
-        
+
         // Update filter count display
         const filterCountEl = document.getElementById('recruteurFilterCountNumber');
         if (filterCountEl) {
             filterCountEl.textContent = allFiltered.length;
         }
-        
+
         // Get items per page from dropdown or default to 10
         const itemsPerPageSelect = document.getElementById('recruteurItemsPerPage');
         const itemsPerPageValue = itemsPerPageSelect?.value || '10';
         const itemsPerPage = itemsPerPageValue === 'all' ? allFiltered.length : parseInt(itemsPerPageValue, 10);
-        
+
         // Pagination
         const currentPage = window.recruteurCurrentPage || 1;
         const totalPages = itemsPerPage === allFiltered.length ? 1 : Math.ceil(allFiltered.length / itemsPerPage);
         const startIdx = itemsPerPage === allFiltered.length ? 0 : (currentPage - 1) * itemsPerPage;
         const endIdx = itemsPerPage === allFiltered.length ? allFiltered.length : startIdx + itemsPerPage;
         const filteredApplications = allFiltered.slice(startIdx, endIdx);
-        
+
         console.log('📄 [PAGINATION]', {
             total: allFiltered.length,
             itemsPerPage: itemsPerPage,
@@ -9337,7 +9312,7 @@ function renderRecruteurApplications() {
         filteredApplications.forEach(cv => {
             const cvId = cv.id || cv.applicantEmail;
             const savedNote = getCandidateNote(cvId);
-            
+
             // Déterminer le statut avancé
             let statusInfo = { label: 'En attente', icon: 'clock', color: '#f39c12', class: 'status-pending' };
             if (cv.status === 'nouveau') statusInfo = { label: '🆕 Nouveau', icon: 'star', color: '#3498db', class: 'status-new' };
@@ -9429,25 +9404,25 @@ function renderRecruteurApplications() {
                     </button>
                 </div>
             `;
-            
-            cvItem.addEventListener('mouseenter', function() {
+
+            cvItem.addEventListener('mouseenter', function () {
                 this.style.transform = 'translateY(-3px)';
                 this.style.boxShadow = 'var(--shadow-lg)';
                 this.style.borderColor = 'var(--accent)';
             });
-            
-            cvItem.addEventListener('mouseleave', function() {
+
+            cvItem.addEventListener('mouseleave', function () {
                 this.style.transform = 'translateY(0)';
                 this.style.boxShadow = 'var(--shadow-md)';
                 this.style.borderColor = 'var(--border)';
             });
-            
+
             candidatures.appendChild(cvItem);
-            
+
             // Setup auto-save for notes
             const noteTextarea = document.getElementById(`note-${cvId}`);
             if (noteTextarea) {
-                noteTextarea.addEventListener('input', debounce(function() {
+                noteTextarea.addEventListener('input', debounce(function () {
                     saveCandidateNote(cvId, this.value);
                 }, 1000));
             }
@@ -9494,7 +9469,7 @@ function renderRecruteurApplications() {
 }
 
 // Update pagination when items per page changes
-window.updateRecruteurPagination = function() {
+window.updateRecruteurPagination = function () {
     // Reset to page 1 when changing items per page
     window.recruteurCurrentPage = 1;
     renderRecruteurApplications();
@@ -9644,8 +9619,8 @@ function getRecruteurFilteredCandidates() {
     if (dateFilter !== 'all') {
         const now = new Date();
         let cutoffDate = new Date();
-        
-        switch(dateFilter) {
+
+        switch (dateFilter) {
             case 'today':
                 cutoffDate.setHours(0, 0, 0, 0);
                 break;
@@ -9659,7 +9634,7 @@ function getRecruteurFilteredCandidates() {
                 cutoffDate.setDate(now.getDate() - 90);
                 break;
         }
-        
+
         candidates = candidates.filter(cv => {
             const appliedDate = cv.appliedAt ? new Date(cv.appliedAt) : (cv.submittedAt ? new Date(cv.submittedAt) : new Date(cv.createdAt || 0));
             return appliedDate >= cutoffDate;
@@ -9979,10 +9954,10 @@ function renderLecteurContent() {
 
     // Render CV database (read-only)
     renderLecteurCvDatabase();
-    
+
     // Render advanced stats
     renderLecteurAdvancedStats();
-    
+
     // Initialize alerts (function removed, keeping for compatibility)
     // initializeLecteurAlerts();
 }
@@ -10175,19 +10150,19 @@ function renderLecteurCvDatabase() {
                         </div>
                     </div>
                 `;
-                
-                cvItem.addEventListener('mouseenter', function() {
+
+                cvItem.addEventListener('mouseenter', function () {
                     this.style.transform = 'translateY(-3px)';
                     this.style.boxShadow = 'var(--shadow-lg)';
                     this.style.borderColor = 'var(--info)';
                 });
-                
-                cvItem.addEventListener('mouseleave', function() {
+
+                cvItem.addEventListener('mouseleave', function () {
                     this.style.transform = 'translateY(0)';
                     this.style.boxShadow = 'var(--shadow-md)';
                     this.style.borderColor = 'var(--border)';
                 });
-                
+
                 container.appendChild(cvItem);
             });
 
@@ -10203,11 +10178,11 @@ function renderLecteurCvDatabase() {
 function setupLecteurInteractions() {
     // Update user info
     document.getElementById('lecteurCurrentUser').textContent = currentUser.username;
-    
+
     // Setup candidature filter
     const candidatureFilter = document.getElementById('lecteurCandidatureFilter');
     if (candidatureFilter) {
-        candidatureFilter.addEventListener('change', function() {
+        candidatureFilter.addEventListener('change', function () {
             renderLecteurCvDatabase();
         });
     }
@@ -10216,13 +10191,13 @@ function setupLecteurInteractions() {
 function exportLecteurCVs() {
     const filter = document.getElementById('lecteurCandidatureFilter') ? document.getElementById('lecteurCandidatureFilter').value : 'all';
     let filteredApplications = siteData.cvDatabase || [];
-    
+
     if (filter === 'pending') {
         filteredApplications = filteredApplications.filter(cv => !cv.processed);
     } else if (filter === 'processed') {
         filteredApplications = filteredApplications.filter(cv => cv.processed);
     }
-    
+
     if (filteredApplications.length === 0) {
         showNotification('Aucun CV à exporter', 'warning');
         return;
@@ -10232,13 +10207,13 @@ function exportLecteurCVs() {
     filteredApplications.forEach(cv => {
         csv += `"${cv.applicantName}","${cv.applicantEmail}","${cv.applicantPhone || ''}","${cv.jobTitle}","${new Date(cv.appliedAt).toLocaleDateString()}","${cv.processed ? 'Traité' : 'En attente'}","${cv.expectedSalary || ''}","${cv.currentlyEmployed || ''}","${cv.lastJobDate || ''}","${cv.lastContractType || ''}"\n`;
     });
-    
+
     const csvBlob = new Blob([csv], { type: 'text/csv' });
     const link = document.createElement('a');
     link.href = URL.createObjectURL(csvBlob);
     link.download = `ae2i_cv_lecteur_${filter}_${new Date().toISOString().split('T')[0]}.csv`;
     link.click();
-    
+
     showNotification(`${filteredApplications.length} CV exportés (${filter})`, 'success');
     logActivity(currentUser.username, `Export CV lecteur: ${filteredApplications.length} CV (${filter})`);
 }
@@ -10382,7 +10357,7 @@ function downloadApplicationPdfSummary(application) {
     logActivity(currentUser.username, `Téléchargement PDF résumé: ${application.applicantName}`);
 }
 // Setup application form avec nouvelles questions obligatoires
-document.addEventListener('DOMContentLoaded', function() {
+document.addEventListener('DOMContentLoaded', function () {
     const applicationForm = document.getElementById('applicationForm');
     const closeApplicationModal = document.getElementById('closeApplicationModal');
 
@@ -10391,7 +10366,7 @@ document.addEventListener('DOMContentLoaded', function() {
     console.log('Setting up driver license radio buttons, found:', licenseRadios.length);
 
     licenseRadios.forEach(radio => {
-        radio.addEventListener('change', function() {
+        radio.addEventListener('change', function () {
             console.log('Radio changed, value:', this.value);
             if (window.toggleDriverLicenseFields) {
                 window.toggleDriverLicenseFields(this.value);
@@ -10402,7 +10377,7 @@ document.addEventListener('DOMContentLoaded', function() {
     });
 
     if (closeApplicationModal) {
-        closeApplicationModal.addEventListener('click', function() {
+        closeApplicationModal.addEventListener('click', function () {
             closeModal('applicationModal');
         });
     }
@@ -10411,34 +10386,34 @@ document.addEventListener('DOMContentLoaded', function() {
     let isSubmittingApplication = false;
 
     if (applicationForm) {
-        applicationForm.addEventListener('submit', async function(e) {
+        applicationForm.addEventListener('submit', async function (e) {
             e.preventDefault();
             e.stopPropagation(); // Prevent any bubbling that might cause navigation
-            
+
             console.log('📝 [FORM SUBMIT] Application form submitted');
             console.log('📝 [FORM SUBMIT] Current URL:', window.location.href);
-    
+
             /* FIX: prevent-double-submit - Check if already processing */
             if (isSubmittingApplication) {
                 console.log('⚠️ [FORM SUBMIT] Form submission already in progress...');
                 return;
             }
-    
+
             // Vérifier le consentement
             if (!checkConsentRequired('forms')) {
                 document.getElementById('consentRequired').style.display = 'block';
                 showNotification('Consentement requis pour soumettre une candidature', 'warning');
                 return;
             }
-    
+
             const jobId = parseInt(this.dataset.jobId);
             const job = siteData.jobs.find(j => j.id == jobId);
-    
+
             if (!job) {
                 showNotification('Erreur: Offre non trouvée', 'error');
                 return;
             }
-    
+
             /* ADD: candidature-validation - Collect all required fields including new ones */
             const applicantLastName = document.getElementById('applicantLastName').value;
             const applicantFirstName = document.getElementById('applicantFirstName').value;
@@ -10457,12 +10432,12 @@ document.addEventListener('DOMContentLoaded', function() {
             const lastContractType = document.querySelector('input[name="lastContractType"]:checked')?.value;
             const hasDriverLicense = document.querySelector('input[name="hasDriverLicense"]:checked')?.value;
             const gender = document.querySelector('input[name="gender"]:checked')?.value;
-    
+
             /* ADD: preavis-negociable-visual - Collect notice period data */
             const inNotice = document.getElementById('inNotice').checked;
             const noticeDays = document.getElementById('noticeDays').value;
             const noticeDaysNegotiable = document.getElementById('noticeDaysNegotiable').checked;
-    
+
             /* ADD: candidature-validation - Collect driver license details */
             let licenseTypes = [];
             if (hasDriverLicense === 'yes') {
@@ -10471,7 +10446,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 });
             }
             const hasVehicle = document.querySelector('input[name="hasVehicle"]:checked')?.value;
-    
+
             // ADD: candidature-validation - Comprehensive validation of all required fields
             if (!applicantFirstName || !applicantLastName || !applicantEmail || !applicantPhone || !applicantCV ||
                 !applicantDiploma || !applicantAge || !expectedSalary || !yearsExperience ||
@@ -10479,14 +10454,14 @@ document.addEventListener('DOMContentLoaded', function() {
                 showNotification('Veuillez remplir tous les champs obligatoires (*)', 'error');
                 return;
             }
-            
+
             /* FIX: prevent-double-submit - Set processing flag and show loading message */
             isSubmittingApplication = true;
             const submitBtn = applicationForm.querySelector('button[type="submit"]');
             const originalBtnText = submitBtn.innerHTML;
             submitBtn.disabled = true;
             submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> <span data-fr="Envoi en cours..." data-en="Submitting..." data-ar="Envoi en cours...">Envoi en cours...</span>';
-    
+
             try {
                 // Créer l'objet application
                 const application = {
@@ -10525,11 +10500,11 @@ document.addEventListener('DOMContentLoaded', function() {
                     consentGiven: consentStatus.accepted,
                     pdfSummary: null
                 };
-                
+
                 // Lire le fichier CV en base64 pour le stockage local
                 const reader = new FileReader();
-                
-                reader.onload = async function(e) {
+
+                reader.onload = async function (e) {
                     console.log('📄 [FORM SUBMIT] CV file read successfully');
                     console.log('📄 [FORM SUBMIT] File size:', applicantCV.size, 'bytes');
                     console.log('📄 [FORM SUBMIT] Current URL:', window.location.href);
@@ -10538,10 +10513,10 @@ document.addEventListener('DOMContentLoaded', function() {
                         application.applicantCV.content = e.target.result;
                         application.pdfSummary = generateApplicationPdfSummary(application, job);
                         console.log('📄 [FORM SUBMIT] PDF summary generated');
-                        
+
                         let r2Result = null;
                         let firebaseResult = null;
-                        
+
                         // ========== MODE FIREBASE ==========
                         if (APP_MODE === 'FIREBASE' && typeof window.firebaseHelper !== 'undefined') {
                             console.log('☁️ [FORM SUBMIT] Firebase mode detected - starting R2 upload...');
@@ -10554,7 +10529,7 @@ document.addEventListener('DOMContentLoaded', function() {
                             } else {
                                 console.error('☁️ [FORM SUBMIT] R2 upload error:', r2Result.error);
                             }
-                            
+
                             if (r2Result.success) {
                                 console.log('🔥 [FORM SUBMIT] Saving application to Firebase...');
                                 // 2. Sauvegarder les métadonnées dans Firebase
@@ -10565,33 +10540,42 @@ document.addEventListener('DOMContentLoaded', function() {
                                     console.log('🔥 [FORM SUBMIT] Firebase ID:', firebaseResult.firebaseId);
                                 } else {
                                     console.error('🔥 [FORM SUBMIT] Firebase save error:', firebaseResult.error);
-                            }
+                                }
                             }
                         } else {
                             console.log('💾 [FORM SUBMIT] Local mode - skipping R2/Firebase');
                         }
-                        
+
                         // ========== MODE LOCAL (toujours sauvegarder localement) ==========
                         // Sauvegarder localement même en mode Firebase pour backup
                         if (!siteData.cvDatabase) siteData.cvDatabase = [];
-                        
+
                         // Ajouter l'URL R2 si upload réussi
                         if (r2Result && r2Result.success) {
-                            application.cvR2Url = r2Result.url;
-                            application.cvR2Path = r2Result.path;
+                            // FIX: Reconstruct correct R2 URL from path
+                            // The worker might return wrong URL, so we build it ourselves
+                            if (r2Result.path) {
+                                application.cvR2Url = `${R2_CONFIG.publicUrl}/${r2Result.path}`;
+                                application.cvR2Path = r2Result.path;
+                                console.log('🔧 [FIX] Reconstructed R2 URL:', application.cvR2Url);
+                            } else {
+                                // Fallback to worker's URL if no path
+                                application.cvR2Url = r2Result.url;
+                                application.cvR2Path = r2Result.path;
+                            }
                         }
-                        
+
                         // Ajouter l'ID Firebase si sauvegarde réussie
                         if (firebaseResult && firebaseResult.success) {
                             application.firebaseId = firebaseResult.firebaseId;
                         }
-                        
+
                         siteData.cvDatabase.push(application);
-                        
+
                         // Sauvegarder localement
                         if (saveSiteData()) {
                             let successMessage = '';
-                            
+
                             if (APP_MODE === 'FIREBASE' && r2Result && r2Result.success && firebaseResult && firebaseResult.success) {
                                 successMessage = siteData.language === 'en' ?
                                     `✅ Thank you ${applicantName}! Your application has been submitted and saved in the cloud.` :
@@ -10601,33 +10585,33 @@ document.addEventListener('DOMContentLoaded', function() {
                                     `✅ Thank you ${applicantName}! Your application has been submitted successfully.` :
                                     `✅ Merci ${applicantName}! Votre candidature a été soumise avec succès.`;
                             }
-                            
+
                             console.log('✅ [FORM SUBMIT] Application saved successfully!');
                             console.log('✅ [FORM SUBMIT] Application ID:', application.id);
                             console.log('✅ [FORM SUBMIT] Final URL:', window.location.href);
                             showNotification(successMessage, 'success');
-                            
+
                             // Notification pour admin et recruteurs connectés
                             if (currentUser.role === 'admin' || currentUser.role === 'recruiter') {
                                 setTimeout(() => {
                                     showCandidateNotification(applicantName, job.title.fr, application.id);
                                 }, 2000);
                             }
-                            
+
                             console.log('🔄 [FORM SUBMIT] Resetting form and closing modal...');
                             applicationForm.reset();
                             closeModal('applicationModal');
                             console.log('✅ [FORM SUBMIT] Form reset and modal closed - NO PAGE RELOAD');
                             console.log('📊 [FORM SUBMIT] All logs above should still be visible');
                             logActivity('applicant', `Candidature soumise pour ${job.title.fr} par ${applicantName}`);
-                            
+
                         } else {
                             throw new Error('Erreur lors de la sauvegarde locale');
                         }
-                        
+
                     } catch (error) {
                         console.error('❌ Error in submission process:', error);
-                        
+
                         // Afficher un message d'erreur approprié
                         if (APP_MODE === 'FIREBASE' && error.message.includes('Firebase') || error.message.includes('R2')) {
                             showNotification('Erreur de connexion au cloud - Sauvegarde locale effectuée', 'warning');
@@ -10638,7 +10622,7 @@ document.addEventListener('DOMContentLoaded', function() {
                         } else {
                             showNotification('Erreur: ' + error.message, 'error');
                         }
-                        
+
                     } finally {
                         // Réinitialiser le bouton dans tous les cas
                         isSubmittingApplication = false;
@@ -10646,17 +10630,17 @@ document.addEventListener('DOMContentLoaded', function() {
                         submitBtn.innerHTML = originalBtnText;
                     }
                 };
-                
-                reader.onerror = function() {
+
+                reader.onerror = function () {
                     console.error('File read error');
                     showNotification('Erreur lors de la lecture du fichier CV', 'error');
                     isSubmittingApplication = false;
                     submitBtn.disabled = false;
                     submitBtn.innerHTML = originalBtnText;
                 };
-                
+
                 reader.readAsDataURL(applicantCV);
-                
+
             } catch (error) {
                 console.error('❌ General submission error:', error);
                 showNotification('Erreur lors de la soumission: ' + error.message, 'error');
@@ -10671,141 +10655,141 @@ document.addEventListener('DOMContentLoaded', function() {
 
 // Fonction pour vérifier si Firebase est disponible
 function isFirebaseAvailable() {
-return typeof window.firebaseHelper !== 'undefined' && APP_MODE === 'FIREBASE';
+    return typeof window.firebaseHelper !== 'undefined' && APP_MODE === 'FIREBASE';
 }
 
 // Fonction pour basculer entre les modes
 function toggleAppMode(mode) {
-if (mode === 'LOCAL' || mode === 'FIREBASE') {
-// Vous pouvez stocker cette préférence dans localStorage
-localStorage.setItem('ae2i_app_mode', mode);
-showNotification(`Mode ${mode} activé`, 'info');
-// Recharger la page pour appliquer les changements
-setTimeout(() => location.reload(), 1500);
-}
+    if (mode === 'LOCAL' || mode === 'FIREBASE') {
+        // Vous pouvez stocker cette préférence dans localStorage
+        localStorage.setItem('ae2i_app_mode', mode);
+        showNotification(`Mode ${mode} activé`, 'info');
+        // Recharger la page pour appliquer les changements
+        setTimeout(() => location.reload(), 1500);
+    }
 }
 
 // Fonction pour initialiser Firebase si disponible
 function initializeFirebaseIfAvailable() {
-if (typeof window.firebaseHelper !== 'undefined') {
-console.log('🔥 Firebase helper disponible');
+    if (typeof window.firebaseHelper !== 'undefined') {
+        console.log('🔥 Firebase helper disponible');
 
-// Écouter les changements d'authentification
-window.firebaseHelper.onAuthChange((user) => {
-    if (user) {
-        console.log('Utilisateur Firebase connecté:', user.email);
-        // Synchroniser le rôle réel depuis Firestore
-        hydrateUserFromFirestore(user).then((hydrated) => {
-            currentUser = hydrated;
-            updateLoginStatus();
-            updateLoginButton();
-            showNotification(`Connecté en tant que ${hydrated.email}`, 'success');
-        }).catch((err) => {
-            console.error('Erreur hydration user:', err);
-            currentUser = {
-                username: user.email,
-                email: user.email,
-                role: 'lecteur',
-                isLoggedIn: true,
-                uid: user.uid
-            };
-            updateLoginStatus();
-            updateLoginButton();
+        // Écouter les changements d'authentification
+        window.firebaseHelper.onAuthChange((user) => {
+            if (user) {
+                console.log('Utilisateur Firebase connecté:', user.email);
+                // Synchroniser le rôle réel depuis Firestore
+                hydrateUserFromFirestore(user).then((hydrated) => {
+                    currentUser = hydrated;
+                    updateLoginStatus();
+                    updateLoginButton();
+                    showNotification(`Connecté en tant que ${hydrated.email}`, 'success');
+                }).catch((err) => {
+                    console.error('Erreur hydration user:', err);
+                    currentUser = {
+                        username: user.email,
+                        email: user.email,
+                        role: 'lecteur',
+                        isLoggedIn: true,
+                        uid: user.uid
+                    };
+                    updateLoginStatus();
+                    updateLoginButton();
+                });
+            } else {
+                console.log('Aucun utilisateur Firebase connecté');
+            }
         });
-    } else {
-        console.log('Aucun utilisateur Firebase connecté');
-    }
-});
 
-// Charger les données depuis Firebase si en mode FIREBASE
-if (APP_MODE === 'FIREBASE') {
-    loadDataFromFirebase();
-}
-}
+        // Charger les données depuis Firebase si en mode FIREBASE
+        if (APP_MODE === 'FIREBASE') {
+            loadDataFromFirebase();
+        }
+    }
 }
 
 // Charger les données depuis Firebase
 async function loadDataFromFirebase() {
-if (!isFirebaseAvailable()) return;
+    if (!isFirebaseAvailable()) return;
 
-try {
-console.log('📡 Chargement des données depuis Firebase...');
+    try {
+        console.log('📡 Chargement des données depuis Firebase...');
 
-// Charger les paramètres
-const settingsResult = await window.firebaseHelper.getDocument('settings', 'main');
-if (settingsResult.success) {
-    // Fusionner les settings avec ceux existants
-    siteData.settings = { ...siteData.settings, ...settingsResult.data };
-    console.log('✅ Settings chargés depuis Firebase');
-}
+        // Charger les paramètres
+        const settingsResult = await window.firebaseHelper.getDocument('settings', 'main');
+        if (settingsResult.success) {
+            // Fusionner les settings avec ceux existants
+            siteData.settings = { ...siteData.settings, ...settingsResult.data };
+            console.log('✅ Settings chargés depuis Firebase');
+        }
 
-// Charger les offres d'emploi
-const jobsResult = await window.firebaseHelper.getCollection(
-    'jobs',
-    [window.firebaseServices.where('active', '==', true)]
-);
-if (jobsResult.success && jobsResult.data.length > 0) {
-    siteData.jobs = jobsResult.data;
-    console.log('✅ Jobs chargés depuis Firebase:', siteData.jobs.length);
-}
+        // Charger les offres d'emploi
+        const jobsResult = await window.firebaseHelper.getCollection(
+            'jobs',
+            [window.firebaseServices.where('active', '==', true)]
+        );
+        if (jobsResult.success && jobsResult.data.length > 0) {
+            siteData.jobs = jobsResult.data;
+            console.log('✅ Jobs chargés depuis Firebase:', siteData.jobs.length);
+        }
 
-// Charger les services
-const servicesResult = await window.firebaseHelper.getCollection(
-    'services',
-    [window.firebaseServices.where('active', '==', true)]
-);
-if (servicesResult.success && servicesResult.data.length > 0) {
-    siteData.services = servicesResult.data;
-    console.log('✅ Services chargés depuis Firebase:', siteData.services.length);
-}
+        // Charger les services
+        const servicesResult = await window.firebaseHelper.getCollection(
+            'services',
+            [window.firebaseServices.where('active', '==', true)]
+        );
+        if (servicesResult.success && servicesResult.data.length > 0) {
+            siteData.services = servicesResult.data;
+            console.log('✅ Services chargés depuis Firebase:', siteData.services.length);
+        }
 
-showNotification('Données chargées depuis le cloud', 'success');
+        showNotification('Données chargées depuis le cloud', 'success');
 
-} catch (error) {
-console.error('❌ Erreur chargement Firebase:', error);
-showNotification('Utilisation des données locales', 'warning');
-}
+    } catch (error) {
+        console.error('❌ Erreur chargement Firebase:', error);
+        showNotification('Utilisation des données locales', 'warning');
+    }
 }
 
 // Initialiser au chargement de la page
-document.addEventListener('DOMContentLoaded', function() {
-initializeFirebaseIfAvailable();
+document.addEventListener('DOMContentLoaded', function () {
+    initializeFirebaseIfAvailable();
 });
 function setupLecteurInteractions() {
     // Update user info
     document.getElementById('lecteurCurrentUser').textContent = currentUser.username;
-    
+
     // Setup candidature filter
     const candidatureFilter = document.getElementById('lecteurCandidatureFilter');
     if (candidatureFilter) {
-        candidatureFilter.addEventListener('change', function() {
+        candidatureFilter.addEventListener('change', function () {
             renderLecteurCvDatabase();
         });
     }
 }
 
 // Initialize website
-document.addEventListener('DOMContentLoaded', function() {
+document.addEventListener('DOMContentLoaded', function () {
     console.log('🚀 Initializing AE2I Ultra-Professional Website...');
-    
+
     // Load saved data
     loadSiteData().catch(err => console.error('Error loading site data:', err));
-    
+
     // Initialize all systems
     initializeWebsite();
-    
+
     // Setup page-specific functionality
     executeHomeScript();
-    
+
     // Setup form handlers
     setupApplicationForm();
-    
+
     // Setup file uploads
     setupFileUploads();
-    
+
     // Hide loading screen
     /* FIX: remove-loading-screen */
-    
+
     console.log('✅ Website fully initialized with enhanced admin dashboard, prism effects, and ultra-professional design');
 });
 
@@ -10831,7 +10815,7 @@ function updateTheme() {
 
 function updateLanguage() {
     siteData.language = siteData.settings.defaultLanguage || siteData.language || 'fr';
-    
+
     // Set HTML lang and dir attributes for the current language
     document.documentElement.lang = siteData.language;
     document.documentElement.dir = siteData.language === 'ar' ? 'rtl' : 'ltr';
@@ -10839,7 +10823,7 @@ function updateLanguage() {
     // Mettre à jour les boutons de langue (FR/EN/AR)
     document.querySelectorAll('.language-btn').forEach(btn => {
         const lang = btn.getAttribute('data-lang');
-        
+
         btn.classList.remove('active');
         btn.setAttribute('aria-pressed', 'false');
         if (lang === siteData.language) {
@@ -10898,49 +10882,49 @@ function applyCustomSettings() {
         document.title = siteData.settings.title;
         document.getElementById('heroTitle').textContent = siteData.settings.title;
     }
-    
+
     // Appliquer le slogan personnalisé
     if (siteData.settings.slogan) {
-                const heroSubtitle = document.getElementById('heroSubtitle');
-                if (heroSubtitle) {
-                    heroSubtitle.textContent = siteData.settings.slogan;
-                }
-            }
-            
-            // Appliquer les tailles de police sauvegardées
-            if (siteData.heroSizes) {
-                const heroTitle = document.getElementById('heroTitle');
-                const heroSubtitle = document.getElementById('heroSubtitle');
-                
-                if (siteData.heroSizes.title && heroTitle) {
-                    heroTitle.style.fontSize = siteData.heroSizes.title + 'px';
-                }
-                
-                if (siteData.heroSizes.subtitle && heroSubtitle) {
-                    heroSubtitle.style.fontSize = siteData.heroSizes.subtitle + 'px';
-                }
-            }
-            
-            // Appliquer le formatage du titre sauvegardé
-            if (siteData.titleFormatting) {
-                const heroTitle = document.getElementById('heroTitle');
-                if (heroTitle) {
-                    heroTitle.style.fontWeight = siteData.titleFormatting.bold ? '900' : '800';
-                    heroTitle.style.fontStyle = siteData.titleFormatting.italic ? 'italic' : 'normal';
-                    heroTitle.style.textDecoration = siteData.titleFormatting.underline ? 'underline' : 'none';
-                }
-            }
-            
-            // Appliquer le formatage du sous-titre sauvegardé
-            if (siteData.subtitleFormatting) {
-                const heroSubtitle = document.getElementById('heroSubtitle');
-                if (heroSubtitle) {
-                    heroSubtitle.style.fontWeight = siteData.subtitleFormatting.bold ? '700' : '400';
-                    heroSubtitle.style.fontStyle = siteData.subtitleFormatting.italic ? 'italic' : 'normal';
-                    heroSubtitle.style.textDecoration = siteData.subtitleFormatting.underline ? 'underline' : 'none';
-                }
+        const heroSubtitle = document.getElementById('heroSubtitle');
+        if (heroSubtitle) {
+            heroSubtitle.textContent = siteData.settings.slogan;
+        }
     }
-    
+
+    // Appliquer les tailles de police sauvegardées
+    if (siteData.heroSizes) {
+        const heroTitle = document.getElementById('heroTitle');
+        const heroSubtitle = document.getElementById('heroSubtitle');
+
+        if (siteData.heroSizes.title && heroTitle) {
+            heroTitle.style.fontSize = siteData.heroSizes.title + 'px';
+        }
+
+        if (siteData.heroSizes.subtitle && heroSubtitle) {
+            heroSubtitle.style.fontSize = siteData.heroSizes.subtitle + 'px';
+        }
+    }
+
+    // Appliquer le formatage du titre sauvegardé
+    if (siteData.titleFormatting) {
+        const heroTitle = document.getElementById('heroTitle');
+        if (heroTitle) {
+            heroTitle.style.fontWeight = siteData.titleFormatting.bold ? '900' : '800';
+            heroTitle.style.fontStyle = siteData.titleFormatting.italic ? 'italic' : 'normal';
+            heroTitle.style.textDecoration = siteData.titleFormatting.underline ? 'underline' : 'none';
+        }
+    }
+
+    // Appliquer le formatage du sous-titre sauvegardé
+    if (siteData.subtitleFormatting) {
+        const heroSubtitle = document.getElementById('heroSubtitle');
+        if (heroSubtitle) {
+            heroSubtitle.style.fontWeight = siteData.subtitleFormatting.bold ? '700' : '400';
+            heroSubtitle.style.fontStyle = siteData.subtitleFormatting.italic ? 'italic' : 'normal';
+            heroSubtitle.style.textDecoration = siteData.subtitleFormatting.underline ? 'underline' : 'none';
+        }
+    }
+
     // Appliquer les fonds personnalisés
     if (siteData.heroBackground) {
         const heroBackground = document.getElementById('heroBackground');
@@ -10960,7 +10944,7 @@ function applyCustomSettings() {
             }
         }
     }
-    
+
     if (siteData.footerBackground) {
         const footerBackground = document.getElementById('footerBackground');
         if (siteData.footerBackground.type === 'gradient') {
@@ -10979,7 +10963,7 @@ function applyCustomSettings() {
             }
         }
     }
-    
+
     // Vérifier le mode maintenance
     if (siteData.settings.maintenanceMode && currentUser.role !== 'admin') {
         document.body.classList.add('maintenance-mode');
@@ -10992,7 +10976,7 @@ function renderFooterServices() {
     if (footerServices) {
         footerServices.innerHTML = '';
         const activeServices = siteData.services.filter(s => s.active).slice(0, 4);
-        
+
         activeServices.forEach(service => {
             const li = document.createElement('li');
             li.innerHTML = `<a href="#services" class="nav-link functional-btn" data-page="services"><i class="fas fa-chevron-right"></i> ${service.title[siteData.language] || service.title.fr}</a>`;
@@ -11031,14 +11015,14 @@ function setupFileUploads() {
 }
 
 // Auto-save functionality OPÉRATIONNELLE
-setInterval(function() {
+setInterval(function () {
     if (currentUser.isLoggedIn) {
         saveSiteData();
     }
 }, 30000); // Auto-save every 30 seconds
 
 // Keyboard shortcuts
-document.addEventListener('keydown', function(e) {
+document.addEventListener('keydown', function (e) {
     if (e.ctrlKey || e.metaKey) {
         switch (e.key) {
             case '1':
@@ -11078,20 +11062,20 @@ document.addEventListener('keydown', function(e) {
 });
 
 // Performance monitoring
-window.addEventListener('load', function() {
+window.addEventListener('load', function () {
     const loadTime = performance.now();
     logActivity('system', `Site chargé en ${loadTime.toFixed(2)}ms`);
-    
+
     // Update performance display
     if (document.getElementById('loadTime')) {
         document.getElementById('loadTime').textContent = `${loadTime.toFixed(2)}ms`;
     }
 });
 // Error handling
-window.addEventListener('error', function(e) {
+window.addEventListener('error', function (e) {
     console.error('JavaScript Error:', e.error);
     logActivity('system', `Erreur: ${e.message}`);
-    
+
     // Update error count
     if (document.getElementById('errorCount')) {
         const currentCount = parseInt(document.getElementById('errorCount').textContent) || 0;
@@ -11117,7 +11101,7 @@ function updateCacheSize() {
             totalSize += localStorage[key].length;
         }
     }
-    
+
     const sizeKB = (totalSize / 1024).toFixed(2);
     if (document.getElementById('cacheSize')) {
         document.getElementById('cacheSize').textContent = `${sizeKB} KB`;
@@ -11130,31 +11114,31 @@ setInterval(updateCacheSize, 100000);
 
 // Fonction de test d'upload CV
 async function testCVUpload() {
-// Créer un faux fichier CV pour le test
-const testContent = "Test CV content";
-const blob = new Blob([testContent], { type: 'text/plain' });
-const testFile = new File([blob], "test_cv.txt", { type: 'text/plain' });
+    // Créer un faux fichier CV pour le test
+    const testContent = "Test CV content";
+    const blob = new Blob([testContent], { type: 'text/plain' });
+    const testFile = new File([blob], "test_cv.txt", { type: 'text/plain' });
 
-console.log('🧪 Test CV Upload...');
+    console.log('🧪 Test CV Upload...');
 
-// Appeler votre fonction d'upload
-const result = await uploadCVToR2(testFile, "Test User", "Test Job");
-console.log('Result:', result);
+    // Appeler votre fonction d'upload
+    const result = await uploadCVToR2(testFile, "Test User", "Test Job");
+    console.log('Result:', result);
 
-if (result.success) {
-alert('✅ Test upload réussi! URL: ' + result.url);
-} else {
-alert('❌ Test upload échoué: ' + result.error);
-}
+    if (result.success) {
+        alert('✅ Test upload réussi! URL: ' + result.url);
+    } else {
+        alert('❌ Test upload échoué: ' + result.error);
+    }
 }
 // ============================================
 // INITIALISATION FINALE - FIN DU FICHIER
 // ============================================
 
 // Appeler l'initialisation Firebase
-document.addEventListener('DOMContentLoaded', function() {
-console.log('📄 DOM Content Loaded - Initialisation Firebase...');
-initializeFirebase();
+document.addEventListener('DOMContentLoaded', function () {
+    console.log('📄 DOM Content Loaded - Initialisation Firebase...');
+    initializeFirebase();
 });
 
 console.log('✅ Script chargé - Fonctions Firebase prêtes');
@@ -11219,13 +11203,13 @@ window.setupRecruteurInteractions = setupRecruteurInteractions;
 // FIX sécurisée pour éviter crash
 window.downloadLecteurCV = (typeof window.downloadLecteurCV === "function")
     ? window.downloadLecteurCV
-    : (typeof window.downloadCV === "function" ? window.downloadCV : function(id) {
+    : (typeof window.downloadCV === "function" ? window.downloadCV : function (id) {
         console.warn("downloadCV manquant, fallback utilisé.");
     });
 
 window.previewLecteurCV = (typeof previewLecteurCV === "function")
     ? previewLecteurCV
-    : (typeof previewCV === "function" ? previewCV : function(id) {
+    : (typeof previewCV === "function" ? previewCV : function (id) {
         console.warn("previewCV manquant, fallback utilisé.");
     });
 window.executeLecteurScript = executeLecteurScript;
@@ -11304,11 +11288,11 @@ window.testCVUpload = testCVUpload;
 // === ADDITIONAL FUNCTIONS (ensure they exist) ===
 // If these don't exist in your code, you can create simple placeholders:
 if (typeof window.viewRecruteurApplications === 'undefined') {
-window.viewRecruteurApplications = function(jobId) {
-console.log('Viewing applications for job:', jobId);
-const applications = siteData.cvDatabase.filter(cv => cv.jobId === jobId);
-console.log('Applications:', applications);
-};
+    window.viewRecruteurApplications = function (jobId) {
+        console.log('Viewing applications for job:', jobId);
+        const applications = siteData.cvDatabase.filter(cv => cv.jobId === jobId);
+        console.log('Applications:', applications);
+    };
 }
 
 // ====================================================================
@@ -11561,7 +11545,7 @@ const AutosaveManager = {
     syncInterval: null,
     pendingChanges: [],
     isOnline: navigator.onLine,
-    
+
     // Initialiser Supabase client
     async initSupabase() {
         if (typeof supabase === 'undefined' && typeof window.supabase === 'undefined') {
@@ -11569,19 +11553,19 @@ const AutosaveManager = {
             const script = document.createElement('script');
             script.src = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2';
             document.head.appendChild(script);
-            
+
             await new Promise(resolve => {
                 script.onload = resolve;
             });
         }
-        
+
         const { createClient } = window.supabase || supabase;
         this.client = createClient(this.supabaseUrl, this.supabaseKey);
-        
+
         console.log('✅ Supabase client initialized');
         return this.client;
     },
-    
+
     // Charger les données depuis localStorage (autosave.json local)
     loadLocal() {
         try {
@@ -11592,7 +11576,7 @@ const AutosaveManager = {
             return this.getDefaultStructure();
         }
     },
-    
+
     // Sauvegarder localement
     saveLocal(data) {
         try {
@@ -11607,7 +11591,7 @@ const AutosaveManager = {
             return false;
         }
     },
-    
+
     // Structure par défaut
     getDefaultStructure() {
         return {
@@ -11626,37 +11610,37 @@ const AutosaveManager = {
             social_media: {}
         };
     },
-    
+
     // Synchroniser avec Supabase (BIDIRECTIONNEL)
     async sync(userEmail = 'visitor', userRole = 'public') {
         if (!this.isOnline) {
             console.warn('⚠️ Offline mode: Changes queued');
             return { success: false, message: 'Offline - changes queued' };
         }
-        
+
         try {
             await this.initSupabase();
-            
+
             const localData = this.loadLocal();
-            
+
             // 1. Envoyer les modifications locales vers Supabase
             await this.pushToSupabase(localData, userEmail, userRole);
-            
+
             // 2. Récupérer les modifications depuis Supabase
             const remoteData = await this.pullFromSupabase();
-            
+
             // 3. Fusionner les données
             const mergedData = this.mergeData(localData, remoteData);
-            
+
             // 4. Sauvegarder localement
             this.saveLocal(mergedData);
-            
+
             // 5. Mettre à jour l'affichage du site
             this.updateSiteDisplay(mergedData);
-            
+
             console.log('✅ Sync completed successfully');
             showNotification('Synchronisation réussie !', 'success');
-            
+
             return { success: true, data: mergedData };
         } catch (error) {
             console.error('❌ Sync error:', error);
@@ -11664,7 +11648,7 @@ const AutosaveManager = {
             return { success: false, error: error.message };
         }
     },
-    
+
     // Pousser les données vers Supabase
     async pushToSupabase(data, userEmail, userRole) {
         try {
@@ -11675,7 +11659,7 @@ const AutosaveManager = {
                     await this.logActivity(userEmail, userRole, 'SYNC', 'services', service.id);
                 }
             }
-            
+
             // Job offers
             if (data.job_offers && data.job_offers.length > 0) {
                 for (const job of data.job_offers) {
@@ -11683,49 +11667,49 @@ const AutosaveManager = {
                     await this.logActivity(userEmail, userRole, 'SYNC', 'job_offers', job.id);
                 }
             }
-            
+
             // Uploads
             if (data.uploads && data.uploads.length > 0) {
                 for (const upload of data.uploads) {
                     await this.client.from('uploads').upsert(upload);
                 }
             }
-            
+
             // Client logos
             if (data.clients_logos && data.clients_logos.length > 0) {
                 for (const logo of data.clients_logos) {
                     await this.client.from('clients_logos').upsert(logo);
                 }
             }
-            
+
             console.log('✅ Data pushed to Supabase');
         } catch (error) {
             console.error('❌ Error pushing to Supabase:', error);
             throw error;
         }
     },
-    
+
     // Récupérer les données depuis Supabase
     async pullFromSupabase() {
         try {
             const data = this.getDefaultStructure();
-            
+
             // Services
             const { data: services } = await this.client.from('services').select('*').order('display_order');
             data.services = services || [];
-            
+
             // Job offers
             const { data: jobs } = await this.client.from('job_offers').select('*').order('created_at', { ascending: false });
             data.job_offers = jobs || [];
-            
+
             // Uploads
             const { data: uploads } = await this.client.from('uploads').select('*');
             data.uploads = uploads || [];
-            
+
             // Client logos
             const { data: logos } = await this.client.from('clients_logos').select('*').order('display_order');
             data.clients_logos = logos || [];
-            
+
             // Site sections
             const { data: sections } = await this.client.from('site_sections').select('*');
             if (sections) {
@@ -11733,7 +11717,7 @@ const AutosaveManager = {
                     data.site_sections[section.section_name] = section.content;
                 });
             }
-            
+
             console.log('✅ Data pulled from Supabase');
             return data;
         } catch (error) {
@@ -11741,7 +11725,7 @@ const AutosaveManager = {
             throw error;
         }
     },
-    
+
     // Fusionner les données (résolution de conflits: last-write-wins)
     mergeData(local, remote) {
         // Pour cet implémentation, on privilégie les données distantes (Supabase)
@@ -11756,7 +11740,7 @@ const AutosaveManager = {
             }
         };
     },
-    
+
     // Mettre à jour l'affichage du site
     updateSiteDisplay(data) {
         try {
@@ -11765,25 +11749,25 @@ const AutosaveManager = {
                 // Fonction à implémenter côté site
                 console.log('🔄 Updating services display');
             }
-            
+
             // Mettre à jour les offres d'emploi
             if (typeof renderJobOffers === 'function' && data.job_offers) {
                 // Fonction à implémenter côté site
                 console.log('🔄 Updating job offers display');
             }
-            
+
             // Mettre à jour les logos clients
             if (typeof renderClientLogos === 'function' && data.clients_logos) {
                 // Fonction à implémenter côté site
                 console.log('🔄 Updating client logos display');
             }
-            
+
             console.log('✅ Site display updated');
         } catch (error) {
             console.error('❌ Error updating site display:', error);
         }
     },
-    
+
     // Logger les activités
     async logActivity(userEmail, userRole, actionType, tableName, recordId = null, oldData = null, newData = null) {
         try {
@@ -11801,73 +11785,73 @@ const AutosaveManager = {
             console.error('❌ Error logging activity:', error);
         }
     },
-    
+
     // Créer ou mettre à jour une ressource
     async upsertResource(type, data, userEmail = 'visitor', userRole = 'admin') {
         try {
             const localData = this.loadLocal();
-            
-            switch(type) {
+
+            switch (type) {
                 case 'service':
                     const serviceIndex = localData.services.findIndex(s => s.id === data.id);
                     const actionType = serviceIndex >= 0 ? 'UPDATE' : 'CREATE';
-                    
+
                     if (serviceIndex >= 0) {
                         localData.services[serviceIndex] = data;
                     } else {
                         localData.services.push(data);
                     }
-                    
+
                     this.saveLocal(localData);
                     await this.sync(userEmail, userRole);
                     break;
-                    
+
                 case 'job_offer':
                     const jobIndex = localData.job_offers.findIndex(j => j.id === data.id);
-                    
+
                     if (jobIndex >= 0) {
                         localData.job_offers[jobIndex] = data;
                     } else {
                         localData.job_offers.push(data);
                     }
-                    
+
                     this.saveLocal(localData);
                     await this.sync(userEmail, userRole);
                     break;
-                    
+
                 case 'upload':
                     localData.uploads.push(data);
                     this.saveLocal(localData);
                     await this.sync(userEmail, userRole);
                     break;
-                    
+
                 case 'client_logo':
                     const logoIndex = localData.clients_logos.findIndex(l => l.id === data.id);
-                    
+
                     if (logoIndex >= 0) {
                         localData.clients_logos[logoIndex] = data;
                     } else {
                         localData.clients_logos.push(data);
                     }
-                    
+
                     this.saveLocal(localData);
                     await this.sync(userEmail, userRole);
                     break;
             }
-            
+
             return { success: true };
         } catch (error) {
             console.error('❌ Error upserting resource:', error);
             return { success: false, error: error.message };
         }
     },
-    
+
     // Supprimer une ressource
     async deleteResource(type, id, userEmail = 'visitor', userRole = 'admin') {
         try {
             const localData = this.loadLocal();
-            
-            switch(type) {
+
+            switch (type) {
                 case 'service':
                     localData.services = localData.services.filter(s => s.id !== id);
                     break;
@@ -11881,34 +11865,34 @@ const AutosaveManager = {
                     localData.clients_logos = localData.clients_logos.filter(l => l.id !== id);
                     break;
             }
-            
+
             this.saveLocal(localData);
-            
+
             // Supprimer aussi de Supabase
             await this.client.from(type + 's').delete().eq('id', id);
             await this.logActivity(userEmail, userRole, 'DELETE', type + 's', id);
-            
+
             return { success: true };
         } catch (error) {
             console.error('❌ Error deleting resource:', error);
             return { success: false, error: error.message };
         }
     },
-    
+
     // Démarrer la synchronisation automatique
     startAutoSync(intervalMs = 60000) {
         if (this.syncInterval) {
             clearInterval(this.syncInterval);
         }
-        
+
         this.syncInterval = setInterval(() => {
             console.log('🔄 Auto-sync triggered');
             this.sync();
         }, intervalMs);
-        
+
         console.log(`✅ Auto-sync started (every ${intervalMs / 1000}s)`);
     },
-    
+
     // Arrêter la synchronisation automatique
     stopAutoSync() {
         if (this.syncInterval) {
@@ -11925,178 +11909,178 @@ window.AutosaveManager = AutosaveManager;
 // Initialiser au chargement de la page
 document.addEventListener('DOMContentLoaded', async () => {
     console.log('🚀 Initializing Autosave Manager...');
-    
+
     // Charger les données locales au démarrage
     const localData = AutosaveManager.loadLocal();
     console.log('📦 Local data loaded:', localData);
-    
+
     // Synchroniser avec Supabase au démarrage
     await AutosaveManager.sync();
-    
+
     // Démarrer la synchronisation automatique (toutes les 60 secondes)
     AutosaveManager.startAutoSync(60000);
-    
+
     // Écouter les changements de connexion
     window.addEventListener('online', () => {
         AutosaveManager.isOnline = true;
         console.log('🌐 Back online - syncing...');
         AutosaveManager.sync();
     });
-    
+
     window.addEventListener('offline', () => {
         AutosaveManager.isOnline = false;
         console.log('📴 Offline mode activated');
         showNotification('Mode hors ligne - les modifications seront synchronisées à la reconnexion', 'warning');
     });
 });
- // --- PATCH start ---
+// --- PATCH start ---
 // Appeler ceci quand firebase est prêt (firebaseReady event dans index.html)
 window.addEventListener('firebaseReady', () => {
-console.log('🔔 firebaseReady reçu — set up cvDatabase listener');
+    console.log('🔔 firebaseReady reçu — set up cvDatabase listener');
 
-if (window.firebaseHelper && typeof window.firebaseHelper.listenToCollection === 'function') {
-// Listen real-time to cvDatabase collection - get ALL documents
-// Use orderBy to ensure we get all documents (Firestore requires orderBy for consistent results)
-const { orderBy } = window.firebaseHelper.firestore || {};
-window.firebaseHelper.listenToCollection('cvDatabase', function(docs) {
-    console.log('🔁 [FIREBASE LISTENER] cvDatabase snapshot reçu, count =', docs.length);
-    console.log('📦 [FIREBASE LISTENER] All document IDs:', docs.map(d => d.id));
-    
-    if (docs.length === 0) {
-        console.warn('⚠️ [FIREBASE LISTENER] No documents received! Check Firebase permissions.');
-        siteData.cvDatabase = [];
-        return;
+    if (window.firebaseHelper && typeof window.firebaseHelper.listenToCollection === 'function') {
+        // Listen real-time to cvDatabase collection - get ALL documents
+        // Use orderBy to ensure we get all documents (Firestore requires orderBy for consistent results)
+        const { orderBy } = window.firebaseHelper.firestore || {};
+        window.firebaseHelper.listenToCollection('cvDatabase', function (docs) {
+            console.log('🔁 [FIREBASE LISTENER] cvDatabase snapshot reçu, count =', docs.length);
+            console.log('📦 [FIREBASE LISTENER] All document IDs:', docs.map(d => d.id));
+
+            if (docs.length === 0) {
+                console.warn('⚠️ [FIREBASE LISTENER] No documents received! Check Firebase permissions.');
+                siteData.cvDatabase = [];
+                return;
+            }
+
+            if (docs.length > 0) {
+                console.log('📦 [FIREBASE LISTENER] First doc sample:', JSON.stringify(docs[0], null, 2));
+                console.log('📦 [FIREBASE LISTENER] First doc keys:', Object.keys(docs[0]));
+            }
+
+            console.log('📊 [FIREBASE LISTENER] Total documents to process:', docs.length);
+
+            // Convertir les timestamps Firebase en dates et normaliser champs attendus par siteData
+            const normalized = docs.map(doc => {
+                const d = { id: doc.id, ...doc.data ? doc.data() : doc };
+                console.log('🔄 [NORMALIZE] Processing doc ID:', doc.id, 'Original fields:', Object.keys(d));
+
+                // serverTimestamp fields -> convertir si nécessaire
+                if (d.submittedAt && d.submittedAt.toDate) {
+                    try { d.appliedAt = d.submittedAt.toDate().toISOString(); } catch (e) { }
+                } else if (d.submittedAt) {
+                    d.appliedAt = (new Date(d.submittedAt)).toISOString();
+                } else if (!d.appliedAt) {
+                    d.appliedAt = new Date().toISOString();
+                }
+
+                // Alignement nom des champs - Firebase uses different field names
+                // Map from Firebase fields to expected fields
+                if (!d.applicantName) {
+                    d.applicantName = d.fullName || d.applicantName || d.cvData?.fullName || d.applicantFullName ||
+                        ((d.applicantFirstName || '') + ' ' + (d.applicantLastName || '')).trim() || 'Candidat';
+                }
+                if (!d.jobTitle) {
+                    d.jobTitle = d.position || d.jobTitle || d.job || d.cvData?.position || 'Poste';
+                }
+
+                // Ensure all required fields exist - map Firebase field names
+                if (!d.applicantEmail) {
+                    d.applicantEmail = d.email || d.applicantEmail || '';
+                }
+                if (!d.applicantPhone) {
+                    d.applicantPhone = d.phone || d.applicantPhone || '';
+                }
+                if (!d.applicantFirstName && d.applicantName) {
+                    // Try to split name if we have full name
+                    const nameParts = d.applicantName.split(' ');
+                    if (nameParts.length > 0) d.applicantFirstName = nameParts[0];
+                }
+                if (!d.applicantLastName && d.applicantName) {
+                    const nameParts = d.applicantName.split(' ');
+                    if (nameParts.length > 1) d.applicantLastName = nameParts.slice(1).join(' ');
+                }
+                if (!d.jobId) {
+                    d.jobId = d.job_id || d.jobId || null;
+                }
+
+                // Map CV URL fields
+                if (!d.cvUrl && d.cvR2Url) {
+                    d.cvUrl = d.cvR2Url;
+                }
+                if (!d.cvR2Url && d.cvUrl) {
+                    d.cvR2Url = d.cvUrl;
+                }
+
+                console.log('✅ [NORMALIZE] Normalized doc:', {
+                    id: d.id,
+                    name: d.applicantName,
+                    email: d.applicantEmail,
+                    phone: d.applicantPhone,
+                    jobTitle: d.jobTitle,
+                    cvUrl: d.cvUrl || d.cvR2Url
+                });
+
+                // Mapper cvUrl depuis cvUrl ou cvR2Url
+                if (!d.cvR2Url && d.cvUrl) {
+                    d.cvR2Url = d.cvUrl;
+                }
+                if (!d.cvUrl && d.cvR2Url) {
+                    d.cvUrl = d.cvR2Url;
+                }
+
+                // processed flag
+                d.processed = !!d.processed;
+
+                // Store Firebase ID for deletion
+                d.firebaseId = doc.id;
+
+                return d;
+            });
+
+            console.log('✅ [NORMALIZE] Successfully normalized', normalized.length, 'documents from', docs.length, 'Firebase documents');
+            if (docs.length !== normalized.length) {
+                console.error('❌ [ERROR] Document count mismatch! Firebase sent:', docs.length, 'but normalized:', normalized.length);
+            }
+
+            // Remplacer siteData.cvDatabase et re-render les dashboards
+            siteData.cvDatabase = normalized;
+
+            console.log('✅ [UPDATE] cvDatabase mis à jour avec', normalized.length, 'candidatures');
+            console.log('📋 [UPDATE] All candidature IDs:', normalized.map(c => c.id));
+            console.log('📋 [FULL DATA] Détails candidatures:', normalized.map(c => ({
+                id: c.id,
+                name: c.applicantName,
+                email: c.applicantEmail,
+                phone: c.applicantPhone,
+                jobId: c.jobId,
+                jobTitle: c.jobTitle,
+                cvUrl: c.cvUrl,
+                cvR2Url: c.cvR2Url,
+                cvFileName: c.cvFileName,
+                allFields: Object.keys(c)
+            })));
+
+            // Re-render les vues pertinentes
+            try {
+                if (typeof renderAdminCvDatabase === 'function') renderAdminCvDatabase();
+                if (typeof renderRecruteurApplications === 'function') {
+                    renderRecruteurApplications();
+                    console.log('✅ Recruteur applications re-rendered');
+                }
+                if (typeof renderRecruteurContent === 'function') {
+                    renderRecruteurContent();
+                    console.log('✅ Recruteur content re-rendered');
+                }
+                if (typeof renderLecteurCvDatabase === 'function') renderLecteurCvDatabase();
+                if (typeof renderLecteurContent === 'function') renderLecteurContent();
+                if (typeof updateAnalytics === 'function') updateAnalytics();
+            } catch (e) {
+                console.error('Erreur lors du re-render après sync CV:', e);
+            }
+        }, [ /* optional query constraints */]);
+    } else {
+        console.warn('⚠️ firebaseHelper.listenToCollection non disponible');
     }
-    
-    if (docs.length > 0) {
-        console.log('📦 [FIREBASE LISTENER] First doc sample:', JSON.stringify(docs[0], null, 2));
-        console.log('📦 [FIREBASE LISTENER] First doc keys:', Object.keys(docs[0]));
-    }
-    
-    console.log('📊 [FIREBASE LISTENER] Total documents to process:', docs.length);
-
-    // Convertir les timestamps Firebase en dates et normaliser champs attendus par siteData
-    const normalized = docs.map(doc => {
-        const d = { id: doc.id, ...doc.data ? doc.data() : doc };
-        console.log('🔄 [NORMALIZE] Processing doc ID:', doc.id, 'Original fields:', Object.keys(d));
-
-        // serverTimestamp fields -> convertir si nécessaire
-        if (d.submittedAt && d.submittedAt.toDate) {
-            try { d.appliedAt = d.submittedAt.toDate().toISOString(); } catch(e){}
-        } else if (d.submittedAt) {
-            d.appliedAt = (new Date(d.submittedAt)).toISOString();
-        } else if (!d.appliedAt) {
-            d.appliedAt = new Date().toISOString();
-        }
-
-        // Alignement nom des champs - Firebase uses different field names
-        // Map from Firebase fields to expected fields
-        if (!d.applicantName) {
-            d.applicantName = d.fullName || d.applicantName || d.cvData?.fullName || d.applicantFullName || 
-                ((d.applicantFirstName || '') + ' ' + (d.applicantLastName || '')).trim() || 'Candidat';
-        }
-        if (!d.jobTitle) {
-            d.jobTitle = d.position || d.jobTitle || d.job || d.cvData?.position || 'Poste';
-        }
-        
-        // Ensure all required fields exist - map Firebase field names
-        if (!d.applicantEmail) {
-            d.applicantEmail = d.email || d.applicantEmail || '';
-        }
-        if (!d.applicantPhone) {
-            d.applicantPhone = d.phone || d.applicantPhone || '';
-        }
-        if (!d.applicantFirstName && d.applicantName) {
-            // Try to split name if we have full name
-            const nameParts = d.applicantName.split(' ');
-            if (nameParts.length > 0) d.applicantFirstName = nameParts[0];
-        }
-        if (!d.applicantLastName && d.applicantName) {
-            const nameParts = d.applicantName.split(' ');
-            if (nameParts.length > 1) d.applicantLastName = nameParts.slice(1).join(' ');
-        }
-        if (!d.jobId) {
-            d.jobId = d.job_id || d.jobId || null;
-        }
-        
-        // Map CV URL fields
-        if (!d.cvUrl && d.cvR2Url) {
-            d.cvUrl = d.cvR2Url;
-        }
-        if (!d.cvR2Url && d.cvUrl) {
-            d.cvR2Url = d.cvUrl;
-        }
-        
-        console.log('✅ [NORMALIZE] Normalized doc:', {
-            id: d.id,
-            name: d.applicantName,
-            email: d.applicantEmail,
-            phone: d.applicantPhone,
-            jobTitle: d.jobTitle,
-            cvUrl: d.cvUrl || d.cvR2Url
-        });
-
-        // Mapper cvUrl depuis cvUrl ou cvR2Url
-        if (!d.cvR2Url && d.cvUrl) {
-            d.cvR2Url = d.cvUrl;
-        }
-        if (!d.cvUrl && d.cvR2Url) {
-            d.cvUrl = d.cvR2Url;
-        }
-
-        // processed flag
-        d.processed = !!d.processed;
-        
-        // Store Firebase ID for deletion
-        d.firebaseId = doc.id;
-
-        return d;
-    });
-    
-    console.log('✅ [NORMALIZE] Successfully normalized', normalized.length, 'documents from', docs.length, 'Firebase documents');
-    if (docs.length !== normalized.length) {
-        console.error('❌ [ERROR] Document count mismatch! Firebase sent:', docs.length, 'but normalized:', normalized.length);
-    }
-
-    // Remplacer siteData.cvDatabase et re-render les dashboards
-    siteData.cvDatabase = normalized;
-    
-    console.log('✅ [UPDATE] cvDatabase mis à jour avec', normalized.length, 'candidatures');
-    console.log('📋 [UPDATE] All candidature IDs:', normalized.map(c => c.id));
-    console.log('📋 [FULL DATA] Détails candidatures:', normalized.map(c => ({
-        id: c.id,
-        name: c.applicantName,
-        email: c.applicantEmail,
-        phone: c.applicantPhone,
-        jobId: c.jobId,
-        jobTitle: c.jobTitle,
-        cvUrl: c.cvUrl,
-        cvR2Url: c.cvR2Url,
-        cvFileName: c.cvFileName,
-        allFields: Object.keys(c)
-    })));
-
-    // Re-render les vues pertinentes
-    try {
-        if (typeof renderAdminCvDatabase === 'function') renderAdminCvDatabase();
-        if (typeof renderRecruteurApplications === 'function') {
-            renderRecruteurApplications();
-            console.log('✅ Recruteur applications re-rendered');
-        }
-        if (typeof renderRecruteurContent === 'function') {
-            renderRecruteurContent();
-            console.log('✅ Recruteur content re-rendered');
-        }
-        if (typeof renderLecteurCvDatabase === 'function') renderLecteurCvDatabase();
-        if (typeof renderLecteurContent === 'function') renderLecteurContent();
-        if (typeof updateAnalytics === 'function') updateAnalytics();
-    } catch (e) {
-        console.error('Erreur lors du re-render après sync CV:', e);
-    }
-}, [ /* optional query constraints */ ]);
-} else {
-console.warn('⚠️ firebaseHelper.listenToCollection non disponible');
-}
 });
 // --- PATCH end ---
 // ============================================
@@ -12148,7 +12132,7 @@ function changeUserRole(username) {
 
     const newRole = newRoleSelect.value;
     const user = siteData.users.find(u => u.username === username);
-    
+
     if (!user) return;
     if (user.role === newRole) {
         showNotification('Le rôle est déjà identique', 'info');
@@ -12159,7 +12143,7 @@ function changeUserRole(username) {
         const oldRole = user.role;
         user.role = newRole;
         saveSiteData();
-        
+
         // Log audit
         addAuditLog({
             user: currentUser.username,
@@ -12292,7 +12276,7 @@ function resetAuditFilters() {
 function exportAuditLogCSV() {
     initializeAuditLog();
     const logs = siteData.auditLog;
-    
+
     let csv = 'Date/Heure,Utilisateur,Action,Détails,IP\n';
     logs.forEach(log => {
         const date = new Date(log.timestamp).toLocaleString('fr-FR');
@@ -12304,7 +12288,7 @@ function exportAuditLogCSV() {
     link.href = URL.createObjectURL(blob);
     link.download = `AE2I_AuditLog_${new Date().toISOString().split('T')[0]}.csv`;
     link.click();
-    
+
     showNotification('Audit Log exporté avec succès', 'success');
 }
 
@@ -12322,12 +12306,12 @@ function initializeThemeCustomization() {
     colorInputs.forEach(({ colorId, textId }) => {
         const colorInput = document.getElementById(colorId);
         const textInput = document.getElementById(textId);
-        
+
         if (colorInput && textInput) {
             colorInput.addEventListener('input', (e) => {
                 textInput.value = e.target.value;
             });
-            
+
             textInput.addEventListener('input', (e) => {
                 if (/^#[0-9A-F]{6}$/i.test(e.target.value)) {
                     colorInput.value = e.target.value;
@@ -12358,7 +12342,7 @@ function applyThemeColors() {
 
 function saveThemeColors() {
     applyThemeColors();
-    
+
     const theme = {
         primary: document.getElementById('primaryColor').value,
         primaryLight: document.getElementById('primaryLightColor').value,
@@ -12368,7 +12352,7 @@ function saveThemeColors() {
     };
 
     localStorage.setItem('ae2i_custom_theme', JSON.stringify(theme));
-    
+
     addAuditLog({
         user: currentUser.username,
         action: 'update',
@@ -12404,7 +12388,7 @@ function loadSavedTheme() {
     const savedTheme = localStorage.getItem('ae2i_custom_theme');
     if (savedTheme) {
         const theme = JSON.parse(savedTheme);
-        
+
         if (theme.primary) {
             document.getElementById('primaryColor').value = theme.primary;
             document.getElementById('primaryColorText').value = theme.primary;
@@ -12454,10 +12438,10 @@ function initializeImageManagement() {
                         preview.src = dataUrl;
                         preview.style.display = 'block';
                         placeholder.style.display = 'none';
-                        
+
                         // Save to localStorage temporarily
                         localStorage.setItem(storageKey + '_temp', dataUrl);
-                        
+
                         showNotification('Image chargée (non sauvegardée)', 'info');
                     };
                     reader.readAsDataURL(file);
@@ -12508,17 +12492,17 @@ function saveAllImages() {
 
 function resetAllImages() {
     if (confirm('Voulez-vous vraiment supprimer toutes les images personnalisées ?')) {
-        const keys = ['ae2i_favicon', 'ae2i_logo', 'ae2i_logo_footer', 'ae2i_watermark', 
-                     'ae2i_favicon_temp', 'ae2i_logo_temp', 'ae2i_logo_footer_temp', 'ae2i_watermark_temp'];
-        
+        const keys = ['ae2i_favicon', 'ae2i_logo', 'ae2i_logo_footer', 'ae2i_watermark',
+            'ae2i_favicon_temp', 'ae2i_logo_temp', 'ae2i_logo_footer_temp', 'ae2i_watermark_temp'];
+
         keys.forEach(key => localStorage.removeItem(key));
-        
+
         // Reset previews
         ['faviconImg', 'logoImg', 'logoFooterImg', 'watermarkImg'].forEach(id => {
             const img = document.getElementById(id);
             if (img) img.style.display = 'none';
         });
-        
+
         ['faviconPlaceholder', 'logoPlaceholder', 'logoFooterPlaceholder', 'watermarkPlaceholder'].forEach(id => {
             const placeholder = document.getElementById(id);
             if (placeholder) placeholder.style.display = 'block';
@@ -12572,7 +12556,7 @@ function exportRecruteurCSV() {
     link.href = URL.createObjectURL(blob);
     link.download = `AE2I_Candidatures_${new Date().toISOString().split('T')[0]}.csv`;
     link.click();
-    
+
     showNotification('Export CSV réussi', 'success');
 }
 
@@ -12609,7 +12593,7 @@ function exportRecruteurPDF() {
     link.href = URL.createObjectURL(blob);
     link.download = `AE2I_Candidatures_${new Date().toISOString().split('T')[0]}.txt`;
     link.click();
-    
+
     showNotification('Export PDF réussi', 'success');
 }
 
@@ -12668,7 +12652,7 @@ function openCVViewer(cvUrl, candidateName) {
 // Stats avancées
 function renderLecteurAdvancedStats() {
     const allCVs = siteData.cvDatabase || [];
-    
+
     // Stats par domaine
     const domaineStats = {};
     allCVs.forEach(cv => {
@@ -12774,7 +12758,7 @@ window.renderLecteurAdvancedStats = renderLecteurAdvancedStats;
 // window.saveLecteurAlert = saveLecteurAlert;
 
 // Version check function for testing
-window.checkCodeVersion = function() {
+window.checkCodeVersion = function () {
     const version = {
         date: '2025-12-11',
         build: '1.0.0',
@@ -12787,12 +12771,12 @@ window.checkCodeVersion = function() {
 };
 
 // Inspect Firebase cvDatabase collection - DIRECT QUERY to verify all documents
-window.inspectFirebaseCandidatures = async function() {
+window.inspectFirebaseCandidatures = async function () {
     if (!window.firebaseHelper) {
         console.error('❌ Firebase helper not available');
         return;
     }
-    
+
     // First, ensure user document exists for permissions
     const currentUser = window.currentUser || JSON.parse(localStorage.getItem('ae2i_current_user') || '{}');
     if (currentUser.uid && currentUser.email && currentUser.role) {
@@ -12801,23 +12785,23 @@ window.inspectFirebaseCandidatures = async function() {
         // Wait a bit for Firestore to update
         await new Promise(resolve => setTimeout(resolve, 500));
     }
-    
+
     try {
         console.log('🔍 [INSPECT] Loading ALL candidatures from Firebase cvDatabase collection...');
         console.log('🔍 [INSPECT] Current user:', currentUser);
-        
+
         // Try direct query without any constraints to get ALL documents
         const result = await window.firebaseHelper.getCollection('cvDatabase', []);
-        
+
         if (result.success && result.data) {
             console.log('✅ [INSPECT] Found', result.data.length, 'candidatures in Firebase (direct query)');
             console.log('📦 [INSPECT] All document IDs:', result.data.map(d => d.id));
             console.log('📦 [INSPECT] Raw Firebase data:', result.data);
-            
+
             // Compare with listener data
             console.log('📊 [INSPECT] Listener has', siteData.cvDatabase?.length || 0, 'candidatures');
             console.log('📊 [INSPECT] Listener IDs:', siteData.cvDatabase?.map(c => c.id) || []);
-            
+
             if (result.data.length !== (siteData.cvDatabase?.length || 0)) {
                 console.warn('⚠️ [INSPECT] MISMATCH! Direct query:', result.data.length, 'vs Listener:', siteData.cvDatabase?.length || 0);
                 const missingIds = result.data.map(d => d.id).filter(id => !siteData.cvDatabase?.some(c => c.id === id));
@@ -12829,7 +12813,7 @@ window.inspectFirebaseCandidatures = async function() {
                     console.warn('⚠️ [INSPECT] Extra IDs in listener (not in Firebase):', extraIds);
                 }
             }
-            
+
             result.data.forEach((doc, index) => {
                 console.log(`\n📄 [INSPECT] Candidature #${index + 1}:`);
                 console.log('  ID:', doc.id);
@@ -12843,37 +12827,37 @@ window.inspectFirebaseCandidatures = async function() {
                 console.log('  CV File Name:', doc.cvFileName || 'NOT SET');
                 console.log('  Full data:', JSON.stringify(doc, null, 2));
             });
-            
+
             return result.data;
         } else {
             console.error('❌ [INSPECT] Failed to load:', result.error);
             console.error('❌ [INSPECT] Error details:', result);
-            
+
             // If permissions error, try to fix and retry
             if (result.error && result.error.includes('permission')) {
                 console.log('💡 [INSPECT] Permission error detected. User document may be missing.');
                 console.log('💡 [INSPECT] Try running: fixUserPermissions()');
             }
-            
+
             return null;
         }
     } catch (error) {
         console.error('❌ [INSPECT] Error:', error);
-        
+
         // If permissions error, suggest fix
         if (error.message && error.message.includes('permission')) {
             console.log('💡 [INSPECT] Permission error. Try running: fixUserPermissions()');
         }
-        
+
         return null;
     }
 };
 
 // Inspect local cvDatabase
-window.inspectLocalCandidatures = function() {
+window.inspectLocalCandidatures = function () {
     console.log('🔍 [INSPECT LOCAL] Current cvDatabase:');
     console.log('  Count:', siteData.cvDatabase?.length || 0);
-    
+
     if (siteData.cvDatabase && siteData.cvDatabase.length > 0) {
         siteData.cvDatabase.forEach((cv, index) => {
             console.log(`\n📄 [INSPECT LOCAL] Candidature #${index + 1}:`);
@@ -12890,14 +12874,14 @@ window.inspectLocalCandidatures = function() {
     } else {
         console.log('  ⚠️ No candidatures in local database');
     }
-    
+
     return siteData.cvDatabase;
 };
 
 // Comprehensive logout test function
-window.testLogout = async function() {
+window.testLogout = async function () {
     console.log('🧪 Testing logout functionality...');
-    
+
     // Check current state
     const beforeState = {
         currentUser: JSON.parse(JSON.stringify(window.currentUser || {})),
@@ -12905,7 +12889,7 @@ window.testLogout = async function() {
         justLoggedOut: typeof justLoggedOut !== 'undefined' ? justLoggedOut : 'undefined'
     };
     console.log('📊 State BEFORE logout:', beforeState);
-    
+
     // Perform logout
     try {
         await logoutFirebase();
@@ -12914,10 +12898,10 @@ window.testLogout = async function() {
         console.error('❌ Logout error:', error);
         return false;
     }
-    
+
     // Wait a bit for async operations
     await new Promise(resolve => setTimeout(resolve, 500));
-    
+
     // Check state after logout
     const afterState = {
         currentUser: JSON.parse(JSON.stringify(window.currentUser || {})),
@@ -12925,7 +12909,7 @@ window.testLogout = async function() {
         isLoggedIn: window.currentUser?.isLoggedIn || false
     };
     console.log('📊 State AFTER logout:', afterState);
-    
+
     // Verify logout succeeded
     const logoutSuccess = !afterState.isLoggedIn && !afterState.localStorage;
     if (logoutSuccess) {
@@ -12935,19 +12919,19 @@ window.testLogout = async function() {
         console.log('Current user:', afterState.currentUser);
         console.log('LocalStorage:', afterState.localStorage);
     }
-    
+
     return logoutSuccess;
 };
 
 // Force logout function (nuclear option)
-window.forceLogout = function() {
+window.forceLogout = function () {
     console.log('💣 FORCE LOGOUT - Clearing everything...');
-    
+
     // Set logout flag
     if (typeof justLoggedOut !== 'undefined') {
         justLoggedOut = true;
     }
-    
+
     // Clear Firebase auth
     if (window.firebaseServices?.auth?.signOut) {
         window.firebaseServices.auth.signOut().catch(console.error);
@@ -12955,38 +12939,38 @@ window.forceLogout = function() {
     if (window.firebaseHelper?.logout) {
         window.firebaseHelper.logout().catch(console.error);
     }
-    
+
     // Clear all storage
     localStorage.removeItem('ae2i_current_user');
     sessionStorage.clear();
-    
+
     // Reset user
     window.currentUser = { username: "guest", role: "guest", isLoggedIn: false };
-    
+
     // Update UI
     if (typeof updateLoginButton === 'function') updateLoginButton();
     if (typeof updateLoginStatus === 'function') updateLoginStatus();
     if (typeof showPage === 'function') showPage('home');
-    
+
     console.log('✅ Force logout completed');
     console.log('Current user:', window.currentUser);
     console.log('LocalStorage session:', localStorage.getItem('ae2i_current_user'));
-    
+
     return true;
 };
 
 // Test login button function
-window.testLoginButton = function() {
+window.testLoginButton = function () {
     console.log('🧪 Testing login button...');
-    
+
     const loginBtn = document.getElementById('loginBtn');
     const loginModal = document.getElementById('loginModal');
-    
+
     if (!loginBtn) {
         console.error('❌ Login button not found!');
         return false;
     }
-    
+
     console.log('✅ Login button found');
     console.log('  - Button text:', loginBtn.textContent);
     console.log('  - Button innerHTML:', loginBtn.innerHTML);
@@ -12994,10 +12978,10 @@ window.testLoginButton = function() {
     console.log('  - Current user:', window.currentUser);
     console.log('  - Is logged in:', window.currentUser?.isLoggedIn);
     console.log('  - Login modal exists:', !!loginModal);
-    
+
     // Check if button should show login or dashboard
     const shouldShowLogin = !window.currentUser?.isLoggedIn || window.currentUser?.role === 'guest';
-    
+
     if (shouldShowLogin) {
         console.log('✅ Button should show LOGIN (user is logged out)');
         console.log('  - Clicking button should open login modal');
@@ -13005,12 +12989,12 @@ window.testLoginButton = function() {
         console.log('✅ Button should show DASHBOARD (user is logged in)');
         console.log('  - Clicking button should route to dashboard');
     }
-    
+
     return true;
 };
 
 // Open login modal manually
-window.openLoginModal = function() {
+window.openLoginModal = function () {
     const loginModal = document.getElementById('loginModal');
     if (loginModal) {
         loginModal.classList.add('show');
@@ -13030,10 +13014,10 @@ window.openLoginModal = function() {
 // that does a DIRECT QUERY to Firebase. This duplicate was removed.
 
 // Inspect local cvDatabase
-window.inspectLocalCandidatures = function() {
+window.inspectLocalCandidatures = function () {
     console.log('🔍 [INSPECT LOCAL] Current cvDatabase:');
     console.log('  Count:', siteData.cvDatabase?.length || 0);
-    
+
     if (siteData.cvDatabase && siteData.cvDatabase.length > 0) {
         siteData.cvDatabase.forEach((cv, index) => {
             console.log(`\n📄 [INSPECT LOCAL] Candidature #${index + 1}:`);
@@ -13050,28 +13034,28 @@ window.inspectLocalCandidatures = function() {
     } else {
         console.log('  ⚠️ No candidatures in local database');
     }
-    
+
     return siteData.cvDatabase;
 };
 
 // Check logout status
-window.checkLogoutStatus = function() {
+window.checkLogoutStatus = function () {
     const loggedOutFlag = localStorage.getItem('ae2i_logged_out');
     const savedSession = localStorage.getItem('ae2i_current_user');
     const currentUserState = window.currentUser;
-    
+
     console.log('🔍 [LOGOUT STATUS CHECK]');
     console.log('  - Logout flag (ae2i_logged_out):', loggedOutFlag);
     console.log('  - Saved session (ae2i_current_user):', savedSession ? 'EXISTS' : 'NONE');
     console.log('  - Current user state:', currentUserState);
     console.log('  - Is logged in:', currentUserState?.isLoggedIn);
-    
+
     if (loggedOutFlag === 'true') {
         console.log('✅ Logout flag is SET - user should stay logged out');
     } else {
         console.log('⚠️ Logout flag is NOT SET - session may be restored');
     }
-    
+
     return {
         logoutFlag: loggedOutFlag,
         hasSession: !!savedSession,
@@ -13080,53 +13064,53 @@ window.checkLogoutStatus = function() {
 };
 
 // Force clear logout flag (for testing)
-window.clearLogoutFlag = function() {
+window.clearLogoutFlag = function () {
     localStorage.removeItem('ae2i_logged_out');
     console.log('✅ Logout flag cleared');
 };
 
 // Delete multiple candidatures from Firebase
-window.deleteMultipleCandidatures = async function(cvIds) {
+window.deleteMultipleCandidatures = async function (cvIds) {
     if (!Array.isArray(cvIds) || cvIds.length === 0) {
         console.error('❌ [BULK DELETE] No IDs provided');
         return { success: false, error: 'No IDs provided' };
     }
-    
+
     // First, ensure user document exists for permissions
     if (APP_MODE === 'FIREBASE' && window.firebaseHelper && currentUser?.uid) {
         console.log('🔧 [BULK DELETE] Ensuring user document exists for permissions...');
         await ensureUserDocumentInFirestore(currentUser.uid, currentUser.email, currentUser.role);
     }
-    
+
     // Skip confirmation if called from deleteAllCandidatures (already confirmed)
     const skipConfirm = window._skipDeleteConfirm;
     window._skipDeleteConfirm = false; // Reset flag
-    
+
     if (!skipConfirm && !confirm(`Supprimer ${cvIds.length} candidature(s)? Cette action est irréversible.`)) {
         return { success: false, cancelled: true };
     }
-    
+
     console.log(`🗑️ [BULK DELETE] Deleting ${cvIds.length} candidatures...`);
-    
+
     let successCount = 0;
     let failCount = 0;
     const errors = [];
-    
+
     for (const cvId of cvIds) {
         try {
             // Find the candidature
-            let cv = siteData.cvDatabase.find(c => 
+            let cv = siteData.cvDatabase.find(c =>
                 c.id === cvId || c.id == cvId || String(c.id) === String(cvId) || c.firebaseId === cvId
             );
-            
+
             if (!cv) {
                 console.warn(`⚠️ [BULK DELETE] Candidature not found: ${cvId}`);
                 failCount++;
                 continue;
             }
-            
+
             const firebaseId = cv.firebaseId || cv.id;
-            
+
             // Delete from Firebase
             if (APP_MODE === 'FIREBASE' && window.firebaseHelper && firebaseId) {
                 const result = await window.firebaseHelper.deleteDocument('cvDatabase', firebaseId);
@@ -13137,12 +13121,12 @@ window.deleteMultipleCandidatures = async function(cvIds) {
                     continue;
                 }
             }
-            
+
             // Delete from local database
-            const cvIndex = siteData.cvDatabase.findIndex(c => 
+            const cvIndex = siteData.cvDatabase.findIndex(c =>
                 c.id === cvId || c.id == cvId || String(c.id) === String(cvId) || c.firebaseId === firebaseId
             );
-            
+
             if (cvIndex >= 0) {
                 siteData.cvDatabase.splice(cvIndex, 1);
                 successCount++;
@@ -13153,7 +13137,7 @@ window.deleteMultipleCandidatures = async function(cvIds) {
             failCount++;
         }
     }
-    
+
     // Save local changes
     if (successCount > 0) {
         saveSiteData();
@@ -13161,7 +13145,7 @@ window.deleteMultipleCandidatures = async function(cvIds) {
         if (typeof renderRecruteurApplications === 'function') renderRecruteurApplications();
         if (typeof renderLecteurCvDatabase === 'function') renderLecteurCvDatabase();
     }
-    
+
     const message = `Supprimé: ${successCount}, Échoué: ${failCount}`;
     if (failCount > 0) {
         showNotification(message, 'warning');
@@ -13169,45 +13153,45 @@ window.deleteMultipleCandidatures = async function(cvIds) {
     } else {
         showNotification(`${successCount} candidature(s) supprimée(s)`, 'success');
     }
-    
+
     logActivity(currentUser.username, `Suppression en masse: ${successCount} candidatures`);
-    
+
     return { success: true, successCount, failCount, errors };
 };
 
 // Delete all test candidatures (filter by email pattern or name)
-window.deleteTestCandidatures = async function() {
+window.deleteTestCandidatures = async function () {
     const testPatterns = ['test', 'example.com', 'Test', 'TEST'];
-    
+
     const testCandidatures = siteData.cvDatabase.filter(cv => {
         const email = (cv.applicantEmail || cv.email || '').toLowerCase();
         const name = (cv.applicantName || '').toLowerCase();
-        return testPatterns.some(pattern => 
+        return testPatterns.some(pattern =>
             email.includes(pattern.toLowerCase()) || name.includes(pattern.toLowerCase())
         );
     });
-    
+
     if (testCandidatures.length === 0) {
         showNotification('Aucune candidature de test trouvée', 'info');
         return;
     }
-    
+
     console.log(`🔍 [DELETE TESTS] Found ${testCandidatures.length} test candidatures:`, testCandidatures.map(c => ({
         id: c.id,
         name: c.applicantName,
         email: c.applicantEmail
     })));
-    
+
     if (!confirm(`Supprimer ${testCandidatures.length} candidature(s) de test? Cette action est irréversible.`)) {
         return;
     }
-    
+
     const cvIds = testCandidatures.map(c => c.firebaseId || c.id);
     return await window.deleteMultipleCandidatures(cvIds);
 };
 
 // Delete all candidatures (use with caution!)
-window.deleteAllCandidatures = async function() {
+window.deleteAllCandidatures = async function () {
     // Check Firebase Auth first
     if (APP_MODE === 'FIREBASE') {
         const authUser = window.firebaseServices?.auth?.currentUser;
@@ -13217,33 +13201,33 @@ window.deleteAllCandidatures = async function() {
             showNotification('Vous devez être connecté avec Firebase Auth pour supprimer', 'error');
             return { success: false, error: 'Not authenticated' };
         }
-        
+
         // Ensure user document exists for permissions
         if (window.firebaseHelper && currentUser?.uid) {
             console.log('🔧 [DELETE ALL] Ensuring user document exists for permissions...');
             await ensureUserDocumentInFirestore(currentUser.uid, currentUser.email, currentUser.role);
         }
     }
-    
+
     const totalCount = siteData.cvDatabase?.length || 0;
     if (totalCount === 0) {
         showNotification('Aucune candidature à supprimer', 'info');
         return { success: true, successCount: 0, failCount: 0 };
     }
-    
+
     if (!confirm(`⚠️ ATTENTION: Supprimer TOUTES les ${totalCount} candidatures? Cette action est irréversible et ne peut pas être annulée!`)) {
         return { success: false, cancelled: true };
     }
-    
+
     if (!confirm('Êtes-vous ABSOLUMENT SÛR? Cliquez OK pour confirmer.')) {
         return { success: false, cancelled: true };
     }
-    
+
     console.log(`🗑️ [DELETE ALL] Starting deletion of ${totalCount} candidatures...`);
     const allIds = siteData.cvDatabase.map(c => c.firebaseId || c.id);
     window._skipDeleteConfirm = true; // Skip double confirmation in deleteMultipleCandidatures
     const result = await window.deleteMultipleCandidatures(allIds);
-    
+
     if (result.success) {
         console.log(`✅ [DELETE ALL] Completed: ${result.successCount} deleted, ${result.failCount} failed`);
         // Refresh UI
@@ -13251,28 +13235,28 @@ window.deleteAllCandidatures = async function() {
         if (typeof renderRecruteurApplications === 'function') renderRecruteurApplications();
         if (typeof renderLecteurCvDatabase === 'function') renderLecteurCvDatabase();
     }
-    
+
     return result;
 };
 
 // Fix user permissions - ensure user document exists in Firestore with CORRECT UID
-window.fixUserPermissions = async function() {
+window.fixUserPermissions = async function () {
     const currentUser = window.currentUser || JSON.parse(localStorage.getItem('ae2i_current_user') || '{}');
-    
+
     if (!currentUser || !currentUser.uid || !currentUser.email) {
         console.error('❌ No user logged in or missing UID/email');
         showNotification('Vous devez être connecté', 'error');
         return;
     }
-    
+
     console.log('🔧 [FIX PERMISSIONS] Current user:', currentUser);
     console.log('🔧 [FIX PERMISSIONS] Firebase Auth UID:', currentUser.uid);
     console.log('🔧 [FIX PERMISSIONS] Email:', currentUser.email);
     console.log('🔧 [FIX PERMISSIONS] Role:', currentUser.role);
-    
+
     // Check if document exists with correct UID
     const userDocByUid = await window.firebaseHelper.getDocument('users', currentUser.uid);
-    
+
     if (userDocByUid.success && userDocByUid.data) {
         console.log('✅ [FIX PERMISSIONS] User document exists with correct UID');
         // Update role if needed
@@ -13287,18 +13271,18 @@ window.fixUserPermissions = async function() {
         showNotification('✅ Document existe avec le bon UID. Permissions OK!', 'success');
         return;
     }
-    
+
     // Document doesn't exist with UID - try to find by email
     console.log('⚠️ [FIX PERMISSIONS] No document found with UID. Searching by email...');
     const { where } = window.firebaseServices || {};
     if (where) {
         const byEmail = await window.firebaseHelper.getCollection('users', [where('email', '==', currentUser.email)]);
-        
+
         if (byEmail.success && byEmail.data && byEmail.data.length > 0) {
             const oldDoc = byEmail.data[0];
             console.log('📋 [FIX PERMISSIONS] Found document by email with ID:', oldDoc.id);
             console.log('📋 [FIX PERMISSIONS] Old document data:', oldDoc);
-            
+
             if (oldDoc.id === currentUser.uid) {
                 // IDs match, just update
                 console.log('✅ [FIX PERMISSIONS] Document ID matches UID, updating...');
@@ -13306,7 +13290,7 @@ window.fixUserPermissions = async function() {
                 showNotification('✅ Document mis à jour avec le bon UID.', 'success');
                 return;
             }
-            
+
             // Create new document with correct UID
             console.log('📝 [FIX PERMISSIONS] Creating new document with correct UID:', currentUser.uid);
             const createResult = await window.firebaseHelper.setDocument('users', currentUser.uid, {
@@ -13318,7 +13302,7 @@ window.fixUserPermissions = async function() {
                 createdAt: oldDoc.createdAt || new Date().toISOString(),
                 updatedAt: new Date().toISOString()
             }, false);
-            
+
             if (createResult.success) {
                 console.log('✅ [FIX PERMISSIONS] New document created with correct UID');
                 console.log('💡 [FIX PERMISSIONS] Old document ID:', oldDoc.id, '- You can delete it manually in Firebase console');
@@ -13345,10 +13329,10 @@ window.fixUserPermissions = async function() {
 // ============================================
 
 // Debug cvDatabase - Check everything
-window.debugCvDatabase = async function() {
+window.debugCvDatabase = async function () {
     console.log('🔍 ===== CV DATABASE DEBUG =====');
     console.log('');
-    
+
     // 1. Check current user
     console.log('1️⃣ CURRENT USER:');
     console.log('  - currentUser:', window.currentUser);
@@ -13357,7 +13341,7 @@ window.debugCvDatabase = async function() {
     console.log('  - Role:', window.currentUser?.role);
     console.log('  - IsLoggedIn:', window.currentUser?.isLoggedIn);
     console.log('');
-    
+
     // 2. Check Firebase Auth
     console.log('2️⃣ FIREBASE AUTH:');
     const authUser = window.firebaseServices?.auth?.currentUser;
@@ -13365,7 +13349,7 @@ window.debugCvDatabase = async function() {
     console.log('  - Auth UID:', authUser?.uid);
     console.log('  - Auth Email:', authUser?.email);
     console.log('');
-    
+
     // 3. Check user document in Firestore
     console.log('3️⃣ USER DOCUMENT IN FIRESTORE:');
     if (window.currentUser?.uid && window.firebaseHelper) {
@@ -13387,7 +13371,7 @@ window.debugCvDatabase = async function() {
         console.log('  - ⚠️ No UID or firebaseHelper not available');
     }
     console.log('');
-    
+
     // 4. Check siteData.cvDatabase (what listener populated)
     console.log('4️⃣ SITE DATA CV DATABASE (from listener):');
     console.log('  - Count:', siteData.cvDatabase?.length || 0);
@@ -13399,7 +13383,7 @@ window.debugCvDatabase = async function() {
         });
     }
     console.log('');
-    
+
     // 5. Direct query to Firebase (bypass listener)
     console.log('5️⃣ DIRECT FIREBASE QUERY (bypass listener):');
     if (window.firebaseHelper) {
@@ -13414,7 +13398,7 @@ window.debugCvDatabase = async function() {
                 result.data.slice(0, 3).forEach((doc, i) => {
                     console.log(`    ${i + 1}. ID: ${doc.id}, Name: ${doc.fullName || doc.applicantName}, Email: ${doc.email || doc.applicantEmail}`);
                 });
-                
+
                 // Compare with listener data
                 console.log('');
                 console.log('  - COMPARISON:');
@@ -13445,7 +13429,7 @@ window.debugCvDatabase = async function() {
         console.log('  - ⚠️ firebaseHelper not available');
     }
     console.log('');
-    
+
     // 6. Check Firestore rules (test permission)
     console.log('6️⃣ PERMISSION TEST:');
     if (window.firebaseHelper && window.currentUser?.uid) {
@@ -13462,7 +13446,7 @@ window.debugCvDatabase = async function() {
         }
     }
     console.log('');
-    
+
     console.log('🔍 ===== END DEBUG =====');
     return {
         user: window.currentUser,
@@ -13473,7 +13457,7 @@ window.debugCvDatabase = async function() {
 };
 
 // Quick test - Get all candidatures count
-window.getCvCount = function() {
+window.getCvCount = function () {
     console.log('📊 CV Counts:');
     console.log('  - Listener (siteData.cvDatabase):', siteData.cvDatabase?.length || 0);
     console.log('  - Current user:', window.currentUser?.role);
@@ -13481,49 +13465,49 @@ window.getCvCount = function() {
 };
 
 // Force Firebase Auth login using stored credentials
-window.forceFirebaseLogin = async function() {
+window.forceFirebaseLogin = async function () {
     console.log('🔐 ===== FORCE FIREBASE LOGIN =====');
-    
+
     const currentUser = window.currentUser || JSON.parse(localStorage.getItem('ae2i_current_user') || '{}');
-    
+
     if (!currentUser.email) {
         console.error('❌ No email found in currentUser. You need to log in through the login form.');
         return false;
     }
-    
+
     console.log('📧 Email:', currentUser.email);
     console.log('💡 You need to enter your password to authenticate with Firebase.');
     console.log('💡 Run: await forceFirebaseLoginWithPassword("your_password")');
-    
+
     return false;
 };
 
 // Force Firebase Auth login with password
-window.forceFirebaseLoginWithPassword = async function(password) {
+window.forceFirebaseLoginWithPassword = async function (password) {
     console.log('🔐 ===== FORCE FIREBASE LOGIN WITH PASSWORD =====');
-    
+
     const currentUser = window.currentUser || JSON.parse(localStorage.getItem('ae2i_current_user') || '{}');
-    
+
     if (!currentUser.email) {
         console.error('❌ No email found in currentUser');
         return false;
     }
-    
+
     if (!password) {
         console.error('❌ Password required');
         return false;
     }
-    
+
     console.log('🔐 Attempting Firebase Auth login for:', currentUser.email);
-    
+
     try {
         if (!window.firebaseHelper || !window.firebaseHelper.login) {
             console.error('❌ FirebaseHelper not available');
             return false;
         }
-        
+
         const result = await window.firebaseHelper.login(currentUser.email, password);
-        
+
         if (result.success) {
             console.log('✅ Firebase Auth login successful!');
             console.log('✅ User:', result.user);
@@ -13540,14 +13524,14 @@ window.forceFirebaseLoginWithPassword = async function(password) {
 };
 
 // Check Firebase Auth status
-window.checkFirebaseAuth = function() {
+window.checkFirebaseAuth = function () {
     console.log('🔍 ===== FIREBASE AUTH STATUS =====');
     const authUser = window.firebaseServices?.auth?.currentUser;
     console.log('  - Firebase Auth User:', authUser);
     console.log('  - Is Authenticated:', authUser !== null);
     console.log('  - Current User (localStorage):', window.currentUser);
     console.log('  - Match:', authUser?.uid === window.currentUser?.uid);
-    
+
     if (!authUser) {
         console.log('');
         console.log('⚠️ NOT AUTHENTICATED WITH FIREBASE!');
@@ -13557,67 +13541,67 @@ window.checkFirebaseAuth = function() {
         console.log('  2. Run: await forceFirebaseLoginWithPassword("your_password")');
         console.log('  3. Run: await quickLogin() - will prompt for password');
     }
-    
+
     return authUser;
 };
 
 // Quick login helper - prompts for password
-window.quickLogin = async function() {
+window.quickLogin = async function () {
     const currentUser = window.currentUser || JSON.parse(localStorage.getItem('ae2i_current_user') || '{}');
-    
+
     if (!currentUser.email) {
         console.error('❌ No email found. Please use the login form.');
         return false;
     }
-    
+
     const password = prompt(`Enter password for ${currentUser.email}:`);
     if (!password) {
         console.log('❌ Login cancelled');
         return false;
     }
-    
+
     console.log('🔐 Logging in...');
     const result = await forceFirebaseLoginWithPassword(password);
-    
+
     if (result) {
         console.log('✅ Login successful! Waiting for listener to sync...');
         console.log('💡 Run: await debugCvDatabase() in a few seconds');
     }
-    
+
     return result;
 };
 
 // Auto-restore Firebase Auth session if localStorage has user but Firebase Auth is null
-window.autoRestoreFirebaseAuth = async function() {
+window.autoRestoreFirebaseAuth = async function () {
     console.log('🔄 ===== AUTO-RESTORE FIREBASE AUTH =====');
-    
+
     const authUser = window.firebaseServices?.auth?.currentUser;
     const savedUser = JSON.parse(localStorage.getItem('ae2i_current_user') || '{}');
-    
+
     console.log('  - Firebase Auth User:', authUser ? '✅ Authenticated' : '❌ Not authenticated');
     console.log('  - Saved User:', savedUser.email || 'None');
-    
+
     if (authUser) {
         console.log('✅ Already authenticated with Firebase Auth');
         return true;
     }
-    
+
     if (!savedUser.email) {
         console.log('⚠️ No saved user found. Please log in.');
         return false;
     }
-    
+
     console.log('');
     console.log('⚠️ Firebase Auth session expired but localStorage has user.');
     console.log('💡 You need to log in again through Firebase Auth.');
     console.log('💡 Run: await quickLogin()');
     console.log('💡 Or use the login button in the UI');
-    
+
     return false;
 };
 
 // Force refresh listener
-window.refreshCvListener = function() {
+window.refreshCvListener = function () {
     console.log('🔄 Refreshing cvDatabase listener...');
     if (window.firebaseHelper && typeof window.firebaseHelper.listenToCollection === 'function') {
         // The listener should already be active, but we can check
@@ -13635,19 +13619,19 @@ console.log('🎉 AE2I Enhanced Ultra-Professional Site - Multi-role System with
 
 // Exposer tout ce qui n'est pas déjà exposé
 const globalFunctions = [
-'testFirebaseConnection',
-'initializeFirebase', 
-'uploadCVToR2',
-'saveApplicationToFirebase',
-'isFirebaseAvailable',
-'toggleAppMode'
+    'testFirebaseConnection',
+    'initializeFirebase',
+    'uploadCVToR2',
+    'saveApplicationToFirebase',
+    'isFirebaseAvailable',
+    'toggleAppMode'
 ];
 
 globalFunctions.forEach(funcName => {
-if (typeof eval(funcName) === 'function' && typeof window[funcName] === 'undefined') {
-window[funcName] = eval(funcName);
-console.log(`✅ ${funcName} exposée globalement`);
-}
+    if (typeof eval(funcName) === 'function' && typeof window[funcName] === 'undefined') {
+        window[funcName] = eval(funcName);
+        console.log(`✅ ${funcName} exposée globalement`);
+    }
 });
 
 console.log('🔥 Toutes les fonctions Firebase sont maintenant disponibles via window.*');

@@ -2429,17 +2429,21 @@ function updateLanguageContent(lang) {
 
     // Update elements with data attributes (support ar)
     document.querySelectorAll('[data-fr][data-en]').forEach(element => {
+        if (element) { // Safety check
         const text = element.getAttribute(`data-${lang}`);
         if (text) {
             element.textContent = text;
+            }
         }
     });
 
     // Also support elements with data-ar attribute
     document.querySelectorAll('[data-ar]').forEach(element => {
+        if (element) { // Safety check
         const text = element.getAttribute(`data-${lang}`);
         if (text) {
             element.textContent = text;
+            }
         }
     });
 
@@ -2675,7 +2679,138 @@ function safeSerialize(data) {
     }
 }
 
-function forceSaveData() {
+// Helper function to get Firebase Auth user, waiting for auth state if needed
+async function getFirebaseAuthUser(maxWaitMs = 2000) {
+    const auth = window.firebaseServices?.auth;
+    if (!auth) {
+        console.warn('⚠️ [AUTH HELPER] Firebase Auth not available');
+        return null;
+    }
+    
+    let authUser = auth.currentUser;
+    
+    // If currentUser is null, wait for auth state to restore (Firebase Auth persistence)
+    if (!authUser) {
+        console.log('⏳ [AUTH HELPER] Waiting for Firebase Auth state to restore...');
+        const startTime = Date.now();
+        const checkInterval = 100;
+        const maxChecks = Math.floor(maxWaitMs / checkInterval);
+        
+        for (let i = 0; i < maxChecks; i++) {
+            await new Promise(resolve => setTimeout(resolve, checkInterval));
+            authUser = auth.currentUser;
+            if (authUser) {
+                console.log(`✅ [AUTH HELPER] Firebase Auth state restored after ${Date.now() - startTime}ms`);
+                return authUser;
+            }
+        }
+        
+        console.warn(`⚠️ [AUTH HELPER] Firebase Auth state not restored after ${maxWaitMs}ms`);
+        console.warn('⚠️ [AUTH HELPER] Auth state:', {
+            hasAuth: !!auth,
+            currentUser: auth?.currentUser?.email || 'null'
+        });
+    }
+    
+    return authUser;
+}
+
+// Helper function to save admin data to Firestore with debug logging and auto-authentication
+async function saveAdminDataToFirestore(collectionName, documentId, data, description = '') {
+    console.log(`🔥 [ADMIN FIREBASE SAVE] ${description || `Saving to ${collectionName}/${documentId}`}`);
+    
+    if (typeof APP_MODE !== 'undefined' && APP_MODE === 'FIREBASE' && typeof window.firebaseHelper !== 'undefined') {
+        try {
+            // Get Firebase Auth user, waiting for auth state if needed
+            let authUser = await getFirebaseAuthUser(2000);
+            
+            // If still not authenticated but locally authenticated as admin, try to authenticate
+            if (!authUser && currentUser && (currentUser.isLoggedIn || currentUser.role === 'admin' || currentUser.role === 'administrator')) {
+                console.log('⚠️ [ADMIN FIREBASE SAVE] Not Firebase authenticated, attempting auto-login...');
+                console.log('⚠️ [ADMIN FIREBASE SAVE] Current user info:', {
+                    email: currentUser.email,
+                    username: currentUser.username,
+                    role: currentUser.role,
+                    isLoggedIn: currentUser.isLoggedIn
+                });
+                const userEmail = currentUser.email || currentUser.username;
+                
+                // Try to find password from siteData.users
+                if (userEmail && siteData.users) {
+                    console.log(`🔍 [ADMIN FIREBASE SAVE] Looking for user in siteData.users...`);
+                    const userData = siteData.users.find(u => (u.email === userEmail || u.username === userEmail) && u.password);
+                    if (userData && userData.password) {
+                        try {
+                            console.log(`🔄 [ADMIN FIREBASE SAVE] Attempting Firebase Auth login for ${userEmail}...`);
+                            const loginResult = await window.firebaseHelper.login(userEmail, userData.password);
+                            if (loginResult && loginResult.success && loginResult.user) {
+                                authUser = loginResult.user;
+                                console.log(`✅ [ADMIN FIREBASE SAVE] Firebase Auth login successful`);
+                                // Update currentUser to reflect Firebase Auth state
+                                if (currentUser) {
+                                    currentUser.isLoggedIn = true;
+                                    currentUser.email = authUser.email;
+                                }
+                            } else {
+                                console.warn(`⚠️ [ADMIN FIREBASE SAVE] Firebase Auth login failed:`, loginResult?.error);
+                                console.warn(`💡 [ADMIN FIREBASE SAVE] Make sure the user exists in Firebase Authentication`);
+                            }
+                        } catch (loginError) {
+                            console.error(`❌ [ADMIN FIREBASE SAVE] Firebase Auth login error:`, loginError);
+                            console.error(`💡 [ADMIN FIREBASE SAVE] Error details:`, loginError.message);
+                        }
+                    } else {
+                        console.warn(`⚠️ [ADMIN FIREBASE SAVE] Password not found for user ${userEmail} in siteData.users`);
+                        console.warn(`💡 [ADMIN FIREBASE SAVE] Available users:`, siteData.users?.map(u => ({ email: u.email, username: u.username, hasPassword: !!u.password })));
+                    }
+                } else {
+                    console.warn(`⚠️ [ADMIN FIREBASE SAVE] Cannot find user email or siteData.users is not available`);
+                }
+            }
+            
+            if (!authUser) {
+                console.warn('⚠️ [ADMIN FIREBASE SAVE] Not authenticated with Firebase Auth - cannot save to Firestore');
+                console.warn('⚠️ [ADMIN FIREBASE SAVE] Current auth state:', {
+                    hasAuth: !!auth,
+                    currentUser: auth?.currentUser?.email || 'null',
+                    localUser: currentUser?.email || currentUser?.username || 'null',
+                    localRole: currentUser?.role || 'null'
+                });
+                console.warn('⚠️ [ADMIN FIREBASE SAVE] User needs to log in through Firebase Auth to save');
+                return { success: false, error: 'Not authenticated' };
+            }
+            
+            const dataToSave = {
+                ...data,
+                lastUpdated: new Date().toISOString(),
+                updatedBy: currentUser?.email || currentUser?.username || 'system',
+                updatedByUid: authUser.uid
+            };
+            
+            console.log(`🔥 [ADMIN FIREBASE SAVE] Collection: ${collectionName}, Document: ${documentId}`);
+            console.log(`🔥 [ADMIN FIREBASE SAVE] Data keys:`, Object.keys(dataToSave));
+            console.log(`🔥 [ADMIN FIREBASE SAVE] Data size:`, JSON.stringify(dataToSave).length, 'bytes');
+            
+            const result = await window.firebaseHelper.setDocument(collectionName, documentId, dataToSave, true);
+            
+            if (result && result.success) {
+                console.log(`✅ [ADMIN FIREBASE SAVE] Successfully saved ${collectionName}/${documentId}`);
+                return { success: true };
+            } else {
+                console.error(`❌ [ADMIN FIREBASE SAVE] Failed to save ${collectionName}/${documentId}:`, result?.error);
+                return { success: false, error: result?.error || 'Unknown error' };
+            }
+        } catch (error) {
+            console.error(`❌ [ADMIN FIREBASE SAVE] Error saving ${collectionName}/${documentId}:`, error);
+            return { success: false, error: error.message };
+        }
+    } else {
+        console.log(`ℹ️ [ADMIN FIREBASE SAVE] Firebase mode not active, skipping Firestore save`);
+        return { success: false, error: 'Firebase mode not active' };
+    }
+}
+
+async function forceSaveData() {
     console.log('[QA] Saving siteData...');
     if (saveInProgress) {
         console.log('⏳ Sauvegarde déjà en cours, attente...');
@@ -2755,6 +2890,7 @@ function forceSaveData() {
         /* ---------------------------
            💾 SAUVEGARDE PRINCIPALE
         ---------------------------- */
+        // Always save to localStorage first (for offline support)
         localStorage.setItem('ae2i_site_data', JSON.stringify(dataToSave));
 
         const savedData = localStorage.getItem('ae2i_site_data');
@@ -2765,6 +2901,113 @@ function forceSaveData() {
 
         sessionStorage.setItem('ae2i_backup_data', JSON.stringify(dataToSave));
         localStorage.setItem('ae2i_last_save', new Date().toISOString());
+
+        /* ---------------------------
+           🔥 SAUVEGARDE FIREBASE (si mode Firebase activé)
+        ---------------------------- */
+        if (typeof APP_MODE !== 'undefined' && APP_MODE === 'FIREBASE' && typeof window.firebaseHelper !== 'undefined') {
+            try {
+                console.log('🔥 [FIREBASE SAVE] Saving siteData to Firestore...');
+                console.log('🔥 [FIREBASE SAVE] Current user:', currentUser?.email || currentUser?.username || 'none');
+                
+                // Get Firebase Auth user, waiting for auth state if needed
+                const auth = window.firebaseServices?.auth;
+                let authUser = await getFirebaseAuthUser(2000);
+                
+                // If still not authenticated but locally authenticated as admin, try to authenticate
+                if (!authUser && currentUser && (currentUser.isLoggedIn || currentUser.role === 'admin' || currentUser.role === 'administrator')) {
+                    console.log('⚠️ [FIREBASE SAVE] Not Firebase authenticated, attempting auto-login...');
+                    console.log('⚠️ [FIREBASE SAVE] Current user info:', {
+                        email: currentUser.email,
+                        username: currentUser.username,
+                        role: currentUser.role,
+                        isLoggedIn: currentUser.isLoggedIn
+                    });
+                    const userEmail = currentUser.email || currentUser.username;
+                    
+                    // Try to find password from siteData.users
+                    if (userEmail && siteData.users) {
+                        console.log(`🔍 [FIREBASE SAVE] Looking for user in siteData.users...`);
+                        const userData = siteData.users.find(u => (u.email === userEmail || u.username === userEmail) && u.password);
+                        if (userData && userData.password) {
+                            try {
+                                console.log(`🔄 [FIREBASE SAVE] Attempting Firebase Auth login for ${userEmail}...`);
+                                const loginResult = await window.firebaseHelper.login(userEmail, userData.password);
+                                if (loginResult && loginResult.success && loginResult.user) {
+                                    authUser = loginResult.user;
+                                    console.log(`✅ [FIREBASE SAVE] Firebase Auth login successful`);
+                                    // Update currentUser to reflect Firebase Auth state
+                                    if (currentUser) {
+                                        currentUser.isLoggedIn = true;
+                                        currentUser.email = authUser.email;
+                                    }
+                                } else {
+                                    console.warn(`⚠️ [FIREBASE SAVE] Firebase Auth login failed:`, loginResult?.error);
+                                    console.warn(`💡 [FIREBASE SAVE] Make sure the user exists in Firebase Authentication`);
+                                }
+                            } catch (loginError) {
+                                console.error(`❌ [FIREBASE SAVE] Firebase Auth login error:`, loginError);
+                                console.error(`💡 [FIREBASE SAVE] Error details:`, loginError.message);
+                            }
+                        } else {
+                            console.warn(`⚠️ [FIREBASE SAVE] Password not found for user ${userEmail} in siteData.users`);
+                            console.warn(`💡 [FIREBASE SAVE] Available users:`, siteData.users?.map(u => ({ email: u.email, username: u.username, hasPassword: !!u.password })));
+                        }
+                    } else {
+                        console.warn(`⚠️ [FIREBASE SAVE] Cannot find user email or siteData.users is not available`);
+                    }
+                }
+                
+                console.log('🔥 [FIREBASE SAVE] Is authenticated:', authUser ? 'yes' : 'no');
+                
+                if (!authUser) {
+                    console.warn('⚠️ [FIREBASE SAVE] Not authenticated with Firebase Auth - cannot save to Firestore');
+                    console.warn('⚠️ [FIREBASE SAVE] Current auth state:', {
+                        hasAuth: !!auth,
+                        currentUser: auth?.currentUser?.email || 'null',
+                        localUser: currentUser?.email || currentUser?.username || 'null',
+                        localRole: currentUser?.role || 'null'
+                    });
+                    console.warn('⚠️ [FIREBASE SAVE] User needs to log in through Firebase Auth to save');
+                    throw new Error('Not authenticated with Firebase Auth');
+                }
+                
+                // Save to Firestore in 'siteData' collection with document ID 'main'
+                const dataToSaveToFirebase = {
+                    ...dataToSave,
+                    lastUpdated: new Date().toISOString(),
+                    updatedBy: currentUser?.email || currentUser?.username || 'system',
+                    updatedByUid: authUser.uid
+                };
+                
+                console.log('🔥 [FIREBASE SAVE] Data size:', JSON.stringify(dataToSaveToFirebase).length, 'bytes');
+                
+                const firebaseResult = await window.firebaseHelper.setDocument('siteData', 'main', dataToSaveToFirebase, true); // true = merge, update existing
+                
+                console.log('🔥 [FIREBASE SAVE] Firebase result:', firebaseResult);
+                
+                if (firebaseResult && firebaseResult.success) {
+                    console.log('✅ [FIREBASE SAVE] Site data saved to Firestore successfully');
+                    console.log('✅ [FIREBASE SAVE] Document ID: siteData/main');
+                } else {
+                    console.error('❌ [FIREBASE SAVE] Firestore save failed:', firebaseResult);
+                    if (firebaseResult && firebaseResult.error) {
+                        console.error('❌ [FIREBASE SAVE] Error details:', firebaseResult.error);
+                    }
+                }
+            } catch (firebaseError) {
+                console.error('❌ [FIREBASE SAVE] Error saving to Firestore:', firebaseError);
+                console.error('❌ [FIREBASE SAVE] Error stack:', firebaseError.stack);
+                // Don't throw - localStorage save succeeded, Firebase is optional
+                console.warn('⚠️ [FIREBASE SAVE] Continuing with localStorage save only');
+            }
+        } else {
+            if (typeof APP_MODE === 'undefined' || APP_MODE !== 'FIREBASE') {
+                console.log('ℹ️ [SAVE] APP_MODE is not FIREBASE, skipping Firestore save');
+            } else if (typeof window.firebaseHelper === 'undefined') {
+                console.warn('⚠️ [SAVE] Firebase helper not available, skipping Firestore save');
+            }
+        }
 
         /* ---------------------------
            🔐 Re-sauvegarde currentUser (sauf après logout)
@@ -2813,7 +3056,7 @@ function saveSiteData() {
 }
 
 
-function loadSiteData() {
+async function loadSiteData() {
     /* 🔥 FIX : restaurer la session depuis localStorage */
 try {
 // Vérifier le flag de logout persistant AVANT de restaurer la session
@@ -2848,13 +3091,120 @@ console.log("ℹ️ [RESTORE] Aucun current_user trouvé");
 console.error("❌ [RESTORE] Erreur restauration session:", e);
 }
     try {
+        // Try loading from Firebase first if in Firebase mode
+        let loadedData = null;
+        let loadedFromFirebase = false;
+        
+        if (typeof APP_MODE !== 'undefined' && APP_MODE === 'FIREBASE' && typeof window.firebaseHelper !== 'undefined') {
+            try {
+                console.log('🔥 [LOAD] Attempting to load siteData from Firestore...');
+                console.log('🔥 [LOAD] Is authenticated:', window.firebaseServices?.auth?.currentUser ? 'yes' : 'no');
+                
+                const firebaseResult = await window.firebaseHelper.getDocument('siteData', 'main');
+                console.log('🔥 [LOAD] Firebase result:', firebaseResult);
+                
+                if (firebaseResult && firebaseResult.success && firebaseResult.data) {
+                    loadedData = firebaseResult.data;
+                    loadedFromFirebase = true;
+                    console.log('✅ [LOAD] Site data loaded from Firestore');
+                    console.log('✅ [LOAD] Last updated:', loadedData.lastUpdated);
+                    console.log('✅ [LOAD] Updated by:', loadedData.updatedBy);
+                    console.log('✅ [LOAD] Data keys:', Object.keys(loadedData).slice(0, 10));
+                } else {
+                    console.log('ℹ️ [LOAD] No siteData found in Firestore, will use localStorage');
+                    if (firebaseResult && firebaseResult.error) {
+                        console.warn('⚠️ [LOAD] Firebase error:', firebaseResult.error);
+                    }
+                }
+                
+                // Also load site settings separately from Firebase (for title and slogan)
+                try {
+                    const settingsResult = await window.firebaseHelper.getDocument('settings', 'main');
+                    if (settingsResult && settingsResult.success && settingsResult.data) {
+                        const settingsData = settingsResult.data;
+                        console.log('✅ [LOAD] Site settings loaded from Firestore');
+                        
+                        // Merge settings into loadedData
+                        if (!loadedData) {
+                            loadedData = {};
+                        }
+                        if (!loadedData.settings) {
+                            loadedData.settings = {};
+                        }
+                        
+                        // Merge site settings (especially title and slogan)
+                        if (settingsData.title) loadedData.settings.title = settingsData.title;
+                        if (settingsData.slogan) loadedData.settings.slogan = settingsData.slogan;
+                        if (settingsData.description) loadedData.settings.description = settingsData.description;
+                        // Merge other settings
+                        Object.keys(settingsData).forEach(key => {
+                            if (key !== 'lastUpdated' && key !== 'updatedBy' && key !== 'updatedByUid') {
+                                if (!loadedData.settings[key]) {
+                                    loadedData.settings[key] = settingsData[key];
+                                }
+                            }
+                        });
+                        
+                        console.log('✅ [LOAD] Site settings merged into siteData');
+                    } else {
+                        console.log('ℹ️ [LOAD] No settings found in Firestore');
+                    }
+                } catch (settingsError) {
+                    console.warn('⚠️ [LOAD] Error loading settings from Firestore:', settingsError);
+                }
+                
+                // Also load hero settings separately from Firebase
+                try {
+                    const heroSettingsResult = await window.firebaseHelper.getDocument('heroSettings', 'main');
+                    if (heroSettingsResult && heroSettingsResult.success && heroSettingsResult.data) {
+                        const heroData = heroSettingsResult.data;
+                        console.log('✅ [LOAD] Hero settings loaded from Firestore');
+                        
+                        // Merge hero settings into loadedData or siteData
+                        if (!loadedData) {
+                            loadedData = {};
+                        }
+                        
+                        // Merge hero settings
+                        if (heroData.titleGradient) loadedData.titleGradient = heroData.titleGradient;
+                        if (heroData.sloganGradient) loadedData.sloganGradient = heroData.sloganGradient;
+                        if (heroData.descriptionGradient) loadedData.descriptionGradient = heroData.descriptionGradient;
+                        if (heroData.heroBackground) loadedData.heroBackground = heroData.heroBackground;
+                        if (heroData.heroSizes) loadedData.heroSizes = heroData.heroSizes;
+                        if (heroData.titleFormatting) loadedData.titleFormatting = heroData.titleFormatting;
+                        if (heroData.subtitleFormatting) loadedData.subtitleFormatting = heroData.subtitleFormatting;
+                        
+                        console.log('✅ [LOAD] Hero settings merged into siteData');
+                    } else {
+                        console.log('ℹ️ [LOAD] No heroSettings found in Firestore');
+                    }
+                } catch (heroError) {
+                    console.warn('⚠️ [LOAD] Error loading heroSettings from Firestore:', heroError);
+                }
+            } catch (firebaseError) {
+                console.warn('⚠️ [LOAD] Error loading from Firestore:', firebaseError);
+                console.warn('⚠️ [LOAD] Error details:', firebaseError.message);
+                console.log('ℹ️ [LOAD] Falling back to localStorage');
+            }
+        }
+        
+        // Fallback to localStorage if Firebase didn't work or not in Firebase mode
+        if (!loadedData) {
         const savedData = localStorage.getItem('ae2i_site_data');
         if (savedData) {
-            const parsed = JSON.parse(savedData);
+                loadedData = JSON.parse(savedData);
+                console.log('💾 [LOAD] Site data loaded from localStorage');
+            }
+        }
 
+        if (loadedData) {
             // Validation des données chargées
-            if (parsed && parsed.settings) {
-                siteData = { ...siteData, ...parsed };
+            if (loadedData && loadedData.settings) {
+                siteData = { ...siteData, ...loadedData };
+                
+                // Remove Firebase-specific fields before merging
+                delete siteData.lastUpdated;
+                delete siteData.updatedBy;
 
                 // Garantir que les utilisateurs par défaut existent toujours
                 const defaultUsers = [
@@ -2992,7 +3342,7 @@ function toggleMaintenanceMode() {
 
 const LINKEDIN_CONFIG = {
     clientId: null,
-    redirectUri: window.location.origin,
+    redirectUri: window.location.origin + window.location.pathname, // Include pathname for proper redirect
     scope: 'openid profile email',
     state: Math.random().toString(36).substring(7)
 };
@@ -3006,8 +3356,8 @@ async function connectLinkedIn() {
     }
 
     try {
-        // FIX: linkedin-backend-auth - Fetch client ID securely from backend
-        const configResponse = await fetch('/.netlify/functions/getLinkedInKey');
+        // FIX: linkedin-backend-auth - Fetch client ID securely from backend (Cloudflare Worker)
+        const configResponse = await fetch(`${R2_CONFIG.workerUrl}/linkedin/key`);
         const config = await configResponse.json();
 
         if (!config.client_id) {
@@ -3016,9 +3366,58 @@ async function connectLinkedIn() {
         }
 
         LINKEDIN_CONFIG.clientId = config.client_id;
-        if (config.redirect_uri) {
-            LINKEDIN_CONFIG.redirectUri = config.redirect_uri;
+        // ALWAYS use the current page URL, NOT the worker's URL
+        // The worker might return its own URL, but we need the frontend URL
+        // IMPORTANT: Your LinkedIn app has: https://ae2i-b6c7f.web.app/carriere/
+        // So we need to ensure trailing slash matches
+        let pathname = window.location.pathname;
+        // If we're on /carriere page, ensure trailing slash to match LinkedIn settings
+        if (pathname === '/carriere') {
+            pathname = '/carriere/'; // Add trailing slash to match LinkedIn app
+        } else if (!pathname.endsWith('/') && pathname !== '/') {
+            // For other pages, keep as-is unless it's root
+            pathname = pathname;
         }
+        LINKEDIN_CONFIG.redirectUri = window.location.origin + pathname;
+        
+        // Only use worker's redirect_uri if it's explicitly set as a secret AND matches our origin
+        // This prevents using the worker's URL by mistake
+        if (config.redirect_uri && config.redirect_uri.startsWith(window.location.origin)) {
+            LINKEDIN_CONFIG.redirectUri = config.redirect_uri;
+            console.log('🔗 [LINKEDIN] Using redirect URI from worker config:', LINKEDIN_CONFIG.redirectUri);
+        } else {
+            console.log('🔗 [LINKEDIN] Using frontend URL (ignoring worker URL):', LINKEDIN_CONFIG.redirectUri);
+            if (config.redirect_uri) {
+                console.warn('⚠️ [LINKEDIN] Worker returned redirect URI:', config.redirect_uri, '- but it doesn\'t match frontend origin, so ignoring it');
+            }
+        }
+        
+        // Log redirect URI for debugging
+        console.log('🔗 [LINKEDIN] Using redirect URI:', LINKEDIN_CONFIG.redirectUri);
+        console.log('⚠️ [LINKEDIN] IMPORTANT: This redirect URI must match EXACTLY in your LinkedIn app settings!');
+        console.log('⚠️ [LINKEDIN] Go to: https://www.linkedin.com/developers/apps → Your App → Auth tab');
+        console.log('⚠️ [LINKEDIN] Your LinkedIn app should have:', LINKEDIN_CONFIG.redirectUri);
+
+        // Save redirect URI to localStorage so it persists after redirect
+        localStorage.setItem('linkedin_debug_redirect_uri', LINKEDIN_CONFIG.redirectUri);
+        localStorage.setItem('linkedin_debug_timestamp', new Date().toISOString());
+        
+        // Also display it on the page so user can see it
+        const debugInfo = document.createElement('div');
+        debugInfo.id = 'linkedin-debug-info';
+        debugInfo.style.cssText = 'position: fixed; top: 10px; right: 10px; background: #ff6b6b; color: white; padding: 15px; border-radius: 8px; z-index: 99999; font-family: monospace; font-size: 12px; max-width: 400px; box-shadow: 0 4px 6px rgba(0,0,0,0.3);';
+        debugInfo.innerHTML = `
+            <strong>🔗 LinkedIn Redirect URI:</strong><br>
+            <code style="background: rgba(0,0,0,0.3); padding: 5px; display: block; margin: 5px 0; word-break: break-all;">${LINKEDIN_CONFIG.redirectUri}</code>
+            <small>This must match EXACTLY in your LinkedIn app settings!</small>
+        `;
+        document.body.appendChild(debugInfo);
+        
+        // Remove debug info after 10 seconds
+        setTimeout(() => {
+            const info = document.getElementById('linkedin-debug-info');
+            if (info) info.remove();
+        }, 10000);
 
         // Build OAuth2 authorization URL
         const authUrl = new URL('https://www.linkedin.com/oauth/v2/authorization');
@@ -3027,12 +3426,20 @@ async function connectLinkedIn() {
         authUrl.searchParams.append('redirect_uri', LINKEDIN_CONFIG.redirectUri);
         authUrl.searchParams.append('scope', LINKEDIN_CONFIG.scope);
         authUrl.searchParams.append('state', LINKEDIN_CONFIG.state);
+        
+        // Log for debugging - check browser console to see what redirect URI is being used
+        console.log('🔗 [LINKEDIN] Redirect URI being sent:', LINKEDIN_CONFIG.redirectUri);
+        console.log('🔗 [LINKEDIN] Full auth URL:', authUrl.toString());
+        console.log('💾 [LINKEDIN] Saved redirect URI to localStorage. After redirect, check: localStorage.getItem("linkedin_debug_redirect_uri")');
 
         sessionStorage.setItem('linkedin_oauth_state', LINKEDIN_CONFIG.state);
         sessionStorage.setItem('linkedin_redirect_origin', 'application_form');
 
+        // Small delay to ensure logs are visible before redirect
+        setTimeout(() => {
         // Redirect to LinkedIn OAuth
         window.location.href = authUrl.toString();
+        }, 500);
     } catch (error) {
         console.error('LinkedIn connection error:', error);
         showNotification(siteData.language === 'en' ? 'Failed to connect to LinkedIn' : 'Échec de connexion à LinkedIn', 'error');
@@ -3055,33 +3462,106 @@ function disconnectLinkedIn() {
     logActivity(currentUser.username || 'visitor', 'Déconnexion LinkedIn');
 }
 async function handleLinkedInCallback() {
+    console.log('🔗 [LINKEDIN CALLBACK] Starting callback handler...');
+    
+    // Display saved redirect URI from localStorage
+    const savedRedirectUri = localStorage.getItem('linkedin_debug_redirect_uri');
+    const savedTimestamp = localStorage.getItem('linkedin_debug_timestamp');
+    if (savedRedirectUri) {
+        console.log('🔗 [LINKEDIN CALLBACK] Redirect URI used (from localStorage):', savedRedirectUri);
+        console.log('🔗 [LINKEDIN CALLBACK] Saved at:', savedTimestamp);
+        
+        // Display on page
+        const debugInfo = document.createElement('div');
+        debugInfo.id = 'linkedin-callback-debug-info';
+        debugInfo.style.cssText = 'position: fixed; top: 10px; right: 10px; background: #4ecdc4; color: white; padding: 15px; border-radius: 8px; z-index: 99999; font-family: monospace; font-size: 12px; max-width: 400px; box-shadow: 0 4px 6px rgba(0,0,0,0.3);';
+        debugInfo.innerHTML = `
+            <strong>🔗 LinkedIn Redirect URI Used:</strong><br>
+            <code style="background: rgba(0,0,0,0.3); padding: 5px; display: block; margin: 5px 0; word-break: break-all;">${savedRedirectUri}</code>
+            <small>Check console for full details</small>
+        `;
+        document.body.appendChild(debugInfo);
+        
+        // Remove after 15 seconds
+        setTimeout(() => {
+            const info = document.getElementById('linkedin-callback-debug-info');
+            if (info) info.remove();
+        }, 15000);
+    }
+    
     const urlParams = new URLSearchParams(window.location.search);
     const code = urlParams.get('code');
     const state = urlParams.get('state');
     const savedState = sessionStorage.getItem('linkedin_oauth_state');
 
-    if (!code || !state || state !== savedState) {
-        if (code) {
-            showNotification(siteData.language === 'en' ? 'LinkedIn authentication failed' : 'Échec de l\'authentification LinkedIn', 'error');
+    console.log('🔗 [LINKEDIN CALLBACK] Code:', code ? 'present' : 'missing');
+    console.log('🔗 [LINKEDIN CALLBACK] State:', state);
+    console.log('🔗 [LINKEDIN CALLBACK] Saved state:', savedState);
+    console.log('🔗 [LINKEDIN CALLBACK] Current URL:', window.location.href);
+
+    if (!code) {
+        console.error('❌ [LINKEDIN CALLBACK] No authorization code in URL');
+        console.error('❌ [LINKEDIN CALLBACK] URL params:', {
+            code: code,
+            state: state,
+            error: urlParams.get('error'),
+            error_description: urlParams.get('error_description'),
+            full_url: window.location.href
+        });
+        showNotification(siteData.language === 'en' ? 'LinkedIn authentication failed: No authorization code' : 'Échec de l\'authentification LinkedIn: Aucun code d\'autorisation', 'error');
+        // Clean up URL without reloading
+        if (window.history && window.history.replaceState) {
+            const cleanUrl = window.location.pathname;
+            window.history.replaceState({}, document.title, cleanUrl);
+            console.log('🔗 [LINKEDIN CALLBACK] Cleaned URL:', cleanUrl);
         }
         return;
     }
+    
+    if (!state || !savedState || state !== savedState) {
+        console.error('❌ [LINKEDIN CALLBACK] State mismatch!');
+        console.error('❌ [LINKEDIN CALLBACK] State from URL:', state);
+        console.error('❌ [LINKEDIN CALLBACK] Saved state:', savedState);
+        console.error('❌ [LINKEDIN CALLBACK] States match:', state === savedState);
+        showNotification(siteData.language === 'en' ? 'LinkedIn authentication failed: Security check failed' : 'Échec de l\'authentification LinkedIn: Échec de la vérification de sécurité', 'error');
+        // Clean up URL without reloading
+        if (window.history && window.history.replaceState) {
+            const cleanUrl = window.location.pathname;
+            window.history.replaceState({}, document.title, cleanUrl);
+            console.log('🔗 [LINKEDIN CALLBACK] Cleaned URL:', cleanUrl);
+        }
+        return;
+    }
+    
+    console.log('✅ [LINKEDIN CALLBACK] Code and state validated successfully');
 
     try {
+        console.log('🔗 [LINKEDIN CALLBACK] Processing authentication...');
         showNotification(siteData.language === 'en' ? 'LinkedIn connection in progress...' : 'Connexion LinkedIn en cours...', 'info');
 
         // FIX: linkedin-backend-auth - Exchange code for token via backend
         const profileData = await fetchLinkedInProfile(code);
+        console.log('🔗 [LINKEDIN CALLBACK] Profile data received:', profileData ? 'success' : 'failed');
 
         if (profileData) {
             sessionStorage.setItem('linkedin_profile_data', JSON.stringify(profileData));
             sessionStorage.setItem('linkedin_access_token', profileData.accessToken);
+            console.log('✅ [LINKEDIN CALLBACK] Profile saved to sessionStorage');
 
             // Prefill form with LinkedIn data
             prefillFormWithLinkedInData(profileData);
+            console.log('✅ [LINKEDIN CALLBACK] Form prefilled');
 
             // Update UI
             updateLinkedInButtonState(true, profileData);
+            console.log('✅ [LINKEDIN CALLBACK] UI updated');
+
+            // Clean up URL parameters WITHOUT reloading
+            if (window.history && window.history.replaceState) {
+                const cleanUrl = window.location.pathname;
+                window.history.replaceState({}, document.title, cleanUrl);
+                console.log('🔗 [LINKEDIN CALLBACK] Cleaned URL (no reload):', cleanUrl);
+            }
 
             // MODIFIED: Auto-redirect to LinkedIn profile in new tab after successful connection
             if (profileData.publicProfileUrl) {
@@ -3097,23 +3577,85 @@ async function handleLinkedInCallback() {
             window.history.replaceState({}, document.title, window.location.pathname);
         }
     } catch (error) {
-        console.error('LinkedIn authentication error:', error);
-        showNotification(siteData.language === 'en' ? 'LinkedIn connection error' : 'Erreur de connexion LinkedIn', 'error');
+        console.error('❌ [LINKEDIN CALLBACK] LinkedIn authentication error:', error);
+        console.error('❌ [LINKEDIN CALLBACK] Error details:', {
+            message: error.message,
+            stack: error.stack,
+            code: urlParams.get('code'),
+            state: urlParams.get('state'),
+            error_param: urlParams.get('error'),
+            error_description: urlParams.get('error_description')
+        });
+        
+        // Check for LinkedIn error parameters
+        const linkedInError = urlParams.get('error');
+        const linkedInErrorDesc = urlParams.get('error_description');
+        
+        if (linkedInError) {
+            console.error('❌ [LINKEDIN CALLBACK] LinkedIn returned error:', linkedInError, linkedInErrorDesc);
+            showNotification(
+                siteData.language === 'en' 
+                    ? `LinkedIn error: ${linkedInErrorDesc || linkedInError}` 
+                    : `Erreur LinkedIn: ${linkedInErrorDesc || linkedInError}`, 
+                'error'
+            );
+        } else {
+            showNotification(
+                siteData.language === 'en' 
+                    ? `LinkedIn connection error: ${error.message}` 
+                    : `Erreur de connexion LinkedIn: ${error.message}`, 
+                'error'
+            );
+        }
+        
+        // Clean up URL on error too
+        if (window.history && window.history.replaceState) {
+            const cleanUrl = window.location.pathname;
+            window.history.replaceState({}, document.title, cleanUrl);
+            console.log('🔗 [LINKEDIN CALLBACK] Cleaned URL after error:', cleanUrl);
+        }
     }
 }
 
 async function fetchLinkedInProfile(code) {
-    // FIX: linkedin-token-exchange - Call backend API to exchange code for token
+        // FIX: linkedin-token-exchange - Call backend API to exchange code for token (Cloudflare Worker)
     // ADD: linkedin-user-profile-fetch - Backend fetches user profile data
     try {
-        const response = await fetch('/.netlify/functions/linkedin_auth', {
+            // Get the redirect URI that was used in the authorization request
+            // Try multiple sources in order of preference
+            let redirectUri = LINKEDIN_CONFIG.redirectUri;
+            if (!redirectUri) {
+                // Try localStorage (saved before redirect)
+                redirectUri = localStorage.getItem('linkedin_debug_redirect_uri');
+            }
+            if (!redirectUri) {
+                // Fallback to current URL
+                let pathname = window.location.pathname;
+                if (pathname === '/carriere') {
+                    pathname = '/carriere/';
+                }
+                redirectUri = window.location.origin + pathname;
+            }
+            
+            console.log('🔗 [LINKEDIN FETCH] Using redirect URI:', redirectUri);
+            console.log('🔗 [LINKEDIN FETCH] Code received:', code ? 'yes' : 'no');
+            console.log('🔗 [LINKEDIN FETCH] Worker URL:', R2_CONFIG.workerUrl);
+            
+            const response = await fetch(`${R2_CONFIG.workerUrl}/linkedin/auth`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ code })
+                body: JSON.stringify({ 
+                    code,
+                    redirect_uri: redirectUri  // Pass the same redirect URI used in authorization
+                })
         });
 
+            console.log('🔗 [LINKEDIN FETCH] Response status:', response.status, response.statusText);
+
         if (!response.ok) {
-            throw new Error('Failed to authenticate with LinkedIn');
+                const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
+                console.error('❌ [LINKEDIN FETCH] Error response:', errorData);
+                throw new Error(errorData.error || `Failed to authenticate with LinkedIn: ${response.status} ${response.statusText}`);
         }
 
         const data = await response.json();
@@ -3213,19 +3755,48 @@ function clearApplicationForm() {
 }
 
 // Check for LinkedIn callback on page load
+console.log('🔍 [LINKEDIN INIT] Checking for callback...');
+console.log('🔍 [LINKEDIN INIT] Current URL:', window.location.href);
+console.log('🔍 [LINKEDIN INIT] Search params:', window.location.search);
+console.log('🔍 [LINKEDIN INIT] Has code param:', window.location.search.includes('code='));
+console.log('🔍 [LINKEDIN INIT] Has error param:', window.location.search.includes('error='));
+
 if (window.location.search.includes('code=')) {
-    handleLinkedInCallback();
+    console.log('✅ [LINKEDIN INIT] LinkedIn callback detected - calling handleLinkedInCallback()');
+    handleLinkedInCallback().catch(error => {
+        console.error('❌ [LINKEDIN INIT] Callback handler failed:', error);
+    });
+} else if (window.location.search.includes('error=')) {
+    // LinkedIn returned an error
+    const urlParams = new URLSearchParams(window.location.search);
+    const error = urlParams.get('error');
+    const errorDescription = urlParams.get('error_description');
+    console.error('❌ [LINKEDIN INIT] LinkedIn returned error:', error, errorDescription);
+    showNotification(
+        siteData.language === 'en' 
+            ? `LinkedIn error: ${errorDescription || error}` 
+            : `Erreur LinkedIn: ${errorDescription || error}`, 
+        'error'
+    );
+    // Clean URL
+    if (window.history && window.history.replaceState) {
+        window.history.replaceState({}, document.title, window.location.pathname);
+    }
 } else {
+    console.log('ℹ️ [LINKEDIN INIT] No callback detected - checking for saved profile...');
     // Check if already connected and update UI
     const savedProfile = sessionStorage.getItem('linkedin_profile_data');
     if (savedProfile) {
         try {
             const profileData = JSON.parse(savedProfile);
+            console.log('✅ [LINKEDIN INIT] Found saved profile, updating UI...');
             updateLinkedInButtonState(true, profileData);
             prefillFormWithLinkedInData(profileData);
         } catch (e) {
-            console.error('Error parsing LinkedIn profile data:', e);
+            console.error('❌ [LINKEDIN INIT] Error parsing LinkedIn profile data:', e);
         }
+    } else {
+        console.log('ℹ️ [LINKEDIN INIT] No saved profile found');
     }
 }
 
@@ -3442,10 +4013,14 @@ function updateIsoImages() {
     }
 }
 
-document.addEventListener('DOMContentLoaded', function() {
+document.addEventListener('DOMContentLoaded', async function() {
     console.log('🚀 [INIT] DOMContentLoaded - currentUser avant loadSiteData:', JSON.stringify(currentUser));
-    loadSiteData();
+    await loadSiteData().catch(err => console.error('Error loading site data:', err));
     console.log('🚀 [INIT] Après loadSiteData - currentUser:', JSON.stringify(currentUser));
+    
+    // Apply hero settings after data is loaded (from Firebase or localStorage)
+    applyAllHeroSettings();
+    
     updateIsoImages(); // FIX: Update ISO images after loading data
     setupNavigation();
     setupLoginSystem();
@@ -3627,6 +4202,84 @@ function applyCustomGradients() {
             heroSubtitle.style.backgroundClip = 'text';
         }
     }
+}
+
+// Apply all hero settings to DOM elements (called after loading data from Firebase)
+function applyAllHeroSettings() {
+    const heroTitle = document.getElementById('heroTitle');
+    const heroSubtitle = document.getElementById('heroSubtitle');
+    const heroBackground = document.getElementById('heroBackground');
+    
+    // Restore title text
+    if (siteData.settings && siteData.settings.title && heroTitle) {
+        heroTitle.textContent = siteData.settings.title;
+        // Also update page title
+        document.title = siteData.settings.title;
+    }
+    
+    // Restore slogan text
+    if (siteData.settings && siteData.settings.slogan && heroSubtitle) {
+        heroSubtitle.textContent = siteData.settings.slogan;
+    }
+    
+    // Apply title gradient
+    if (siteData.titleGradient && heroTitle) {
+        heroTitle.style.background = siteData.titleGradient.gradient;
+        heroTitle.style.webkitBackgroundClip = 'text';
+        heroTitle.style.webkitTextFillColor = 'transparent';
+        heroTitle.style.backgroundClip = 'text';
+    }
+    
+    // Apply slogan gradient
+    if (siteData.sloganGradient && heroSubtitle) {
+        heroSubtitle.style.background = siteData.sloganGradient.gradient;
+        heroSubtitle.style.webkitBackgroundClip = 'text';
+        heroSubtitle.style.webkitTextFillColor = 'transparent';
+        heroSubtitle.style.backgroundClip = 'text';
+    }
+    
+    // Apply description gradient
+    if (siteData.descriptionGradient) {
+        const heroDescription = document.getElementById('heroDescription');
+        if (heroDescription) {
+            heroDescription.style.background = siteData.descriptionGradient.gradient;
+            heroDescription.style.webkitBackgroundClip = 'text';
+            heroDescription.style.webkitTextFillColor = 'transparent';
+            heroDescription.style.backgroundClip = 'text';
+        }
+    }
+    
+    // Apply hero background gradient
+    if (siteData.heroBackground && siteData.heroBackground.gradient && heroBackground) {
+        heroBackground.style.background = siteData.heroBackground.gradient;
+        heroBackground.classList.remove('has-image', 'has-video');
+    }
+    
+    // Apply hero title size
+    if (siteData.heroSizes && siteData.heroSizes.title && heroTitle) {
+        heroTitle.style.fontSize = siteData.heroSizes.title + 'px';
+    }
+    
+    // Apply hero subtitle size
+    if (siteData.heroSizes && siteData.heroSizes.subtitle && heroSubtitle) {
+        heroSubtitle.style.fontSize = siteData.heroSizes.subtitle + 'px';
+    }
+    
+    // Apply title formatting
+    if (siteData.titleFormatting && heroTitle) {
+        heroTitle.style.fontWeight = siteData.titleFormatting.bold ? '900' : '800';
+        heroTitle.style.fontStyle = siteData.titleFormatting.italic ? 'italic' : 'normal';
+        heroTitle.style.textDecoration = siteData.titleFormatting.underline ? 'underline' : 'none';
+    }
+    
+    // Apply subtitle formatting
+    if (siteData.subtitleFormatting && heroSubtitle) {
+        heroSubtitle.style.fontWeight = siteData.subtitleFormatting.bold ? '700' : '400';
+        heroSubtitle.style.fontStyle = siteData.subtitleFormatting.italic ? 'italic' : 'normal';
+        heroSubtitle.style.textDecoration = siteData.subtitleFormatting.underline ? 'underline' : 'none';
+    }
+    
+    console.log('✅ Hero settings applied to DOM');
 }
 function renderHomeContent() {
     const homeServicesGrid = document.getElementById('homeServicesGrid');
@@ -4640,16 +5293,22 @@ window.showAdminTab = showAdminTab;
 function initializeHeroSettings() {
     // Initialiser les valeurs des gradients
     if (siteData.titleGradient) {
-        document.getElementById('titleGradientStart').value = siteData.titleGradient.start;
-        document.getElementById('titleGradientEnd').value = siteData.titleGradient.end;
+        const titleGradientStart = document.getElementById('titleGradientStart');
+        const titleGradientEnd = document.getElementById('titleGradientEnd');
+        if (titleGradientStart) titleGradientStart.value = siteData.titleGradient.start;
+        if (titleGradientEnd) titleGradientEnd.value = siteData.titleGradient.end;
     }
     if (siteData.sloganGradient) {
-        document.getElementById('sloganGradientStart').value = siteData.sloganGradient.start;
-        document.getElementById('sloganGradientEnd').value = siteData.sloganGradient.end;
+        const sloganGradientStart = document.getElementById('sloganGradientStart');
+        const sloganGradientEnd = document.getElementById('sloganGradientEnd');
+        if (sloganGradientStart) sloganGradientStart.value = siteData.sloganGradient.start;
+        if (sloganGradientEnd) sloganGradientEnd.value = siteData.sloganGradient.end;
     }
     if (siteData.descriptionGradient) {
-        document.getElementById('descriptionGradientStart').value = siteData.descriptionGradient.start;
-        document.getElementById('descriptionGradientEnd').value = siteData.descriptionGradient.end;
+        const descriptionGradientStart = document.getElementById('descriptionGradientStart');
+        const descriptionGradientEnd = document.getElementById('descriptionGradientEnd');
+        if (descriptionGradientStart) descriptionGradientStart.value = siteData.descriptionGradient.start;
+        if (descriptionGradientEnd) descriptionGradientEnd.value = siteData.descriptionGradient.end;
     }
     
     // Restore hero title size
@@ -4707,6 +5366,9 @@ function initializeHeroSettings() {
             heroTitle.style.textDecoration = siteData.titleFormatting.underline ? 'underline' : 'none';
         }
     }
+    
+    // Apply all hero settings to DOM (in case they weren't applied on page load)
+    applyAllHeroSettings();
     
     updateGradientPreviews();
 }
@@ -5094,7 +5756,7 @@ function updateGradientPreviews() {
 
 // NOUVELLES FONCTIONS POUR LA SECTION HERO
 /* ADD: Function to toggle text formatting for Hero title */
-function toggleTitleFormatting(type) {
+async function toggleTitleFormatting(type) {
     if (!siteData.titleFormatting) {
         siteData.titleFormatting = { bold: false, italic: false, underline: false };
     }
@@ -5108,13 +5770,25 @@ function toggleTitleFormatting(type) {
         heroTitle.style.textDecoration = siteData.titleFormatting.underline ? 'underline' : 'none';
     }
 
+    // Save to Firebase immediately using helper function
+    const heroSettings = {
+        titleGradient: siteData.titleGradient,
+        sloganGradient: siteData.sloganGradient,
+        descriptionGradient: siteData.descriptionGradient,
+        heroBackground: siteData.heroBackground,
+        heroSizes: siteData.heroSizes,
+        titleFormatting: siteData.titleFormatting,
+        subtitleFormatting: siteData.subtitleFormatting
+    };
+    await saveAdminDataToFirestore('heroSettings', 'main', heroSettings, `Hero title formatting: ${type}`);
+
     if (forceSaveData()) {
         showNotification(`Formatage ${type} ${siteData.titleFormatting[type] ? 'activé' : 'désactivé'}`, 'success');
     }
 }
 
 /* ADD: hero-title-size-control - Function to update Hero title size */
-function updateHeroTitleSize(size) {
+async function updateHeroTitleSize(size) {
     const heroTitle = document.getElementById('heroTitle');
     const sizeValue = document.getElementById('heroTitleSizeValue');
 
@@ -5131,11 +5805,23 @@ function updateHeroTitleSize(size) {
     }
     siteData.heroSizes.title = size;
 
+    // Save to Firebase immediately using helper function
+    const heroSettings = {
+        titleGradient: siteData.titleGradient,
+        sloganGradient: siteData.sloganGradient,
+        descriptionGradient: siteData.descriptionGradient,
+        heroBackground: siteData.heroBackground,
+        heroSizes: siteData.heroSizes,
+        titleFormatting: siteData.titleFormatting,
+        subtitleFormatting: siteData.subtitleFormatting
+    };
+    await saveAdminDataToFirestore('heroSettings', 'main', heroSettings, 'Hero title size');
+
     forceSaveData();
 }
 
 /* ADD: hero-subtitle-style - Function to toggle text formatting for Hero subtitle */
-function toggleSubtitleFormatting(type) {
+async function toggleSubtitleFormatting(type) {
     if (!siteData.subtitleFormatting) {
         siteData.subtitleFormatting = { bold: false, italic: false, underline: false };
     }
@@ -5149,13 +5835,25 @@ function toggleSubtitleFormatting(type) {
         heroSubtitle.style.textDecoration = siteData.subtitleFormatting.underline ? 'underline' : 'none';
     }
 
+    // Save to Firebase immediately using helper function
+    const heroSettings = {
+        titleGradient: siteData.titleGradient,
+        sloganGradient: siteData.sloganGradient,
+        descriptionGradient: siteData.descriptionGradient,
+        heroBackground: siteData.heroBackground,
+        heroSizes: siteData.heroSizes,
+        titleFormatting: siteData.titleFormatting,
+        subtitleFormatting: siteData.subtitleFormatting
+    };
+    await saveAdminDataToFirestore('heroSettings', 'main', heroSettings, `Hero subtitle formatting: ${type}`);
+
     if (forceSaveData()) {
         showNotification(`Formatage sous-titre ${type} ${siteData.subtitleFormatting[type] ? 'activé' : 'désactivé'}`, 'success');
     }
 }
 
 /* ADD: hero-subtitle-size-control - Function to update Hero subtitle size */
-function updateHeroSubtitleSize(size) {
+async function updateHeroSubtitleSize(size) {
     const heroSubtitle = document.getElementById('heroSubtitle');
     const sizeValue = document.getElementById('heroSubtitleSizeValue');
 
@@ -5172,10 +5870,22 @@ function updateHeroSubtitleSize(size) {
     }
     siteData.heroSizes.subtitle = size;
 
+    // Save to Firebase immediately using helper function
+    const heroSettings = {
+        titleGradient: siteData.titleGradient,
+        sloganGradient: siteData.sloganGradient,
+        descriptionGradient: siteData.descriptionGradient,
+        heroBackground: siteData.heroBackground,
+        heroSizes: siteData.heroSizes,
+        titleFormatting: siteData.titleFormatting,
+        subtitleFormatting: siteData.subtitleFormatting
+    };
+    await saveAdminDataToFirestore('heroSettings', 'main', heroSettings, 'Hero subtitle size');
+
     forceSaveData();
 }
 
-function updateSiteTitle() {
+async function updateSiteTitle() {
     const title = document.getElementById('siteTitle').value;
     siteData.settings.title = title;
 
@@ -5205,6 +5915,9 @@ function updateSiteTitle() {
         }
     }
 
+    // Save to Firebase immediately using helper function
+    await saveAdminDataToFirestore('settings', 'main', siteData.settings, 'Site title');
+
     if (forceSaveData()) {
         showNotification('Titre du site mis à jour', 'success');
         logActivity(currentUser.username, 'Titre du site modifié');
@@ -5213,7 +5926,7 @@ function updateSiteTitle() {
     }
 }
 
-function updateSiteSlogan() {
+async function updateSiteSlogan() {
     const slogan = document.getElementById('siteSlogan').value;
     siteData.settings.slogan = slogan;
     
@@ -5240,6 +5953,9 @@ function updateSiteSlogan() {
         }
     }
     
+    // Save to Firebase immediately using helper function
+    await saveAdminDataToFirestore('settings', 'main', siteData.settings, 'Site slogan');
+    
     if (forceSaveData()) {
         showNotification('Slogan du site mis à jour', 'success');
         logActivity(currentUser.username, 'Slogan du site modifié');
@@ -5248,9 +5964,12 @@ function updateSiteSlogan() {
     }
 }
 
-function updateSiteDescription() {
+async function updateSiteDescription() {
     const description = document.getElementById('siteDescription').value;
     siteData.settings.description = description;
+    
+    // Save to Firestore
+    await saveAdminDataToFirestore('settings', 'main', siteData.settings, 'Site description');
     
     if (forceSaveData()) {
         showNotification('Description du site mise à jour', 'success');
@@ -5260,7 +5979,7 @@ function updateSiteDescription() {
     }
 }
 
-function applyTitleGradient() {
+async function applyTitleGradient() {
     const start = document.getElementById('titleGradientStart').value;
     const end = document.getElementById('titleGradientEnd').value;
     
@@ -5279,6 +5998,18 @@ function applyTitleGradient() {
         heroTitle.style.backgroundClip = 'text';
     }
     
+    // Save to Firebase immediately using helper function
+    const heroSettings = {
+        titleGradient: siteData.titleGradient,
+        sloganGradient: siteData.sloganGradient,
+        descriptionGradient: siteData.descriptionGradient,
+        heroBackground: siteData.heroBackground,
+        heroSizes: siteData.heroSizes,
+        titleFormatting: siteData.titleFormatting,
+        subtitleFormatting: siteData.subtitleFormatting
+    };
+    await saveAdminDataToFirestore('heroSettings', 'main', heroSettings, 'Hero title gradient');
+    
     if (forceSaveData()) {
         showNotification('Dégradé titre appliqué', 'success');
         logActivity(currentUser.username, 'Dégradé titre modifié');
@@ -5286,7 +6017,7 @@ function applyTitleGradient() {
         showNotification('Échec d\'application du dégradé titre', 'error');
     }
 }
-function applySloganGradient() {
+async function applySloganGradient() {
     const start = document.getElementById('sloganGradientStart').value;
     const end = document.getElementById('sloganGradientEnd').value;
     
@@ -5305,6 +6036,18 @@ function applySloganGradient() {
         heroSubtitle.style.backgroundClip = 'text';
     }
     
+    // Save to Firebase immediately using helper function
+    const heroSettings = {
+        titleGradient: siteData.titleGradient,
+        sloganGradient: siteData.sloganGradient,
+        descriptionGradient: siteData.descriptionGradient,
+        heroBackground: siteData.heroBackground,
+        heroSizes: siteData.heroSizes,
+        titleFormatting: siteData.titleFormatting,
+        subtitleFormatting: siteData.subtitleFormatting
+    };
+    await saveAdminDataToFirestore('heroSettings', 'main', heroSettings, 'Hero slogan gradient');
+    
     if (forceSaveData()) {
         showNotification('Dégradé slogan appliqué', 'success');
         logActivity(currentUser.username, 'Dégradé slogan modifié');
@@ -5312,7 +6055,7 @@ function applySloganGradient() {
         showNotification('Échec d\'application du dégradé slogan', 'error');
     }
 }
-function applyDescriptionGradient() {
+async function applyDescriptionGradient() {
     const start = document.getElementById('descriptionGradientStart').value;
     const end = document.getElementById('descriptionGradientEnd').value;
     
@@ -5322,6 +6065,18 @@ function applyDescriptionGradient() {
         gradient: `linear-gradient(135deg, ${start} 0%, ${end} 100%)`
     };
     
+    // Save to Firebase immediately using helper function
+    const heroSettings = {
+        titleGradient: siteData.titleGradient,
+        sloganGradient: siteData.sloganGradient,
+        descriptionGradient: siteData.descriptionGradient,
+        heroBackground: siteData.heroBackground,
+        heroSizes: siteData.heroSizes,
+        titleFormatting: siteData.titleFormatting,
+        subtitleFormatting: siteData.subtitleFormatting
+    };
+    await saveAdminDataToFirestore('heroSettings', 'main', heroSettings, 'Hero description gradient');
+    
     if (forceSaveData()) {
         showNotification('Dégradé description appliqué', 'success');
         logActivity(currentUser.username, 'Dégradé description modifié');
@@ -5330,7 +6085,7 @@ function applyDescriptionGradient() {
     }
 }
 
-function applyHeroGradient() {
+async function applyHeroGradient() {
     const start = document.getElementById('heroGradientStart').value;
     const end = document.getElementById('heroGradientEnd').value;
     
@@ -5344,6 +6099,18 @@ function applyHeroGradient() {
         heroBackground.style.background = siteData.heroBackground.gradient;
         heroBackground.classList.remove('has-image', 'has-video');
     }
+    
+    // Save to Firebase immediately using helper function
+    const heroSettings = {
+        titleGradient: siteData.titleGradient,
+        sloganGradient: siteData.sloganGradient,
+        descriptionGradient: siteData.descriptionGradient,
+        heroBackground: siteData.heroBackground,
+        heroSizes: siteData.heroSizes,
+        titleFormatting: siteData.titleFormatting,
+        subtitleFormatting: siteData.subtitleFormatting
+    };
+    await saveAdminDataToFirestore('heroSettings', 'main', heroSettings, 'Hero background gradient');
     
     if (forceSaveData()) {
         showNotification('Dégradé hero appliqué', 'success');
@@ -7559,10 +8326,22 @@ function toggleTestimonial(index) {
     }
 }
 
-function deleteTestimonial(index) {
+async function deleteTestimonial(index) {
     if (confirm('Supprimer ce témoignage? Cette action est irréversible.')) {
         const testimonial = siteData.testimonials[index];
+        const testimonialId = testimonial.id.toString();
         siteData.testimonials.splice(index, 1);
+        
+        // Delete from Firestore
+        if (typeof APP_MODE !== 'undefined' && APP_MODE === 'FIREBASE' && typeof window.firebaseHelper !== 'undefined') {
+            try {
+                await window.firebaseHelper.deleteDocument('testimonials', testimonialId);
+                console.log(`✅ [ADMIN FIREBASE DELETE] Deleted testimonial ${testimonialId}`);
+            } catch (error) {
+                console.error(`❌ [ADMIN FIREBASE DELETE] Error deleting testimonial ${testimonialId}:`, error);
+            }
+        }
+        
         if (saveSiteData()) {
             renderAdminTestimonials();
             showNotification('Témoignage supprimé', 'success');
@@ -7715,10 +8494,22 @@ function duplicatePage(index) {
     }
 }
 
-function deletePage(index) {
+async function deletePage(index) {
     if (confirm('Supprimer cette page? Cette action est irréversible.')) {
         const page = siteData.customPages[index];
+        const pageId = page.id.toString();
         siteData.customPages.splice(index, 1);
+        
+        // Delete from Firestore
+        if (typeof APP_MODE !== 'undefined' && APP_MODE === 'FIREBASE' && typeof window.firebaseHelper !== 'undefined') {
+            try {
+                await window.firebaseHelper.deleteDocument('customPages', pageId);
+                console.log(`✅ [ADMIN FIREBASE DELETE] Deleted page ${pageId}`);
+            } catch (error) {
+                console.error(`❌ [ADMIN FIREBASE DELETE] Error deleting page ${pageId}:`, error);
+            }
+        }
+        
         if (saveSiteData()) {
             renderAdminPages();
             showNotification('Page supprimée', 'success');
@@ -9622,10 +10413,14 @@ document.addEventListener('DOMContentLoaded', function() {
     if (applicationForm) {
         applicationForm.addEventListener('submit', async function(e) {
             e.preventDefault();
+            e.stopPropagation(); // Prevent any bubbling that might cause navigation
+            
+            console.log('📝 [FORM SUBMIT] Application form submitted');
+            console.log('📝 [FORM SUBMIT] Current URL:', window.location.href);
     
             /* FIX: prevent-double-submit - Check if already processing */
             if (isSubmittingApplication) {
-                console.log('Form submission already in progress...');
+                console.log('⚠️ [FORM SUBMIT] Form submission already in progress...');
                 return;
             }
     
@@ -9735,25 +10530,45 @@ document.addEventListener('DOMContentLoaded', function() {
                 const reader = new FileReader();
                 
                 reader.onload = async function(e) {
+                    console.log('📄 [FORM SUBMIT] CV file read successfully');
+                    console.log('📄 [FORM SUBMIT] File size:', applicantCV.size, 'bytes');
+                    console.log('📄 [FORM SUBMIT] Current URL:', window.location.href);
                     try {
                         // Ajouter le contenu base64 pour le stockage local
                         application.applicantCV.content = e.target.result;
                         application.pdfSummary = generateApplicationPdfSummary(application, job);
+                        console.log('📄 [FORM SUBMIT] PDF summary generated');
                         
                         let r2Result = null;
                         let firebaseResult = null;
                         
                         // ========== MODE FIREBASE ==========
                         if (APP_MODE === 'FIREBASE' && typeof window.firebaseHelper !== 'undefined') {
+                            console.log('☁️ [FORM SUBMIT] Firebase mode detected - starting R2 upload...');
                             // 1. Upload le CV vers Cloudflare R2
                             showNotification('Upload du CV vers le cloud...', 'info');
                             r2Result = await uploadCVToR2(applicantCV, applicantName, job.title.fr);
+                            console.log('☁️ [FORM SUBMIT] R2 upload completed:', r2Result.success ? '✅ SUCCESS' : '❌ FAILED');
+                            if (r2Result.success) {
+                                console.log('☁️ [FORM SUBMIT] R2 URL:', r2Result.url);
+                            } else {
+                                console.error('☁️ [FORM SUBMIT] R2 upload error:', r2Result.error);
+                            }
                             
                             if (r2Result.success) {
+                                console.log('🔥 [FORM SUBMIT] Saving application to Firebase...');
                                 // 2. Sauvegarder les métadonnées dans Firebase
                                 showNotification('Sauvegarde des données...', 'info');
                                 firebaseResult = await saveApplicationToFirebase(application, r2Result.url);
+                                console.log('🔥 [FORM SUBMIT] Firebase save completed:', firebaseResult.success ? '✅ SUCCESS' : '❌ FAILED');
+                                if (firebaseResult.success) {
+                                    console.log('🔥 [FORM SUBMIT] Firebase ID:', firebaseResult.firebaseId);
+                                } else {
+                                    console.error('🔥 [FORM SUBMIT] Firebase save error:', firebaseResult.error);
                             }
+                            }
+                        } else {
+                            console.log('💾 [FORM SUBMIT] Local mode - skipping R2/Firebase');
                         }
                         
                         // ========== MODE LOCAL (toujours sauvegarder localement) ==========
@@ -9787,6 +10602,9 @@ document.addEventListener('DOMContentLoaded', function() {
                                     `✅ Merci ${applicantName}! Votre candidature a été soumise avec succès.`;
                             }
                             
+                            console.log('✅ [FORM SUBMIT] Application saved successfully!');
+                            console.log('✅ [FORM SUBMIT] Application ID:', application.id);
+                            console.log('✅ [FORM SUBMIT] Final URL:', window.location.href);
                             showNotification(successMessage, 'success');
                             
                             // Notification pour admin et recruteurs connectés
@@ -9796,8 +10614,11 @@ document.addEventListener('DOMContentLoaded', function() {
                                 }, 2000);
                             }
                             
+                            console.log('🔄 [FORM SUBMIT] Resetting form and closing modal...');
                             applicationForm.reset();
                             closeModal('applicationModal');
+                            console.log('✅ [FORM SUBMIT] Form reset and modal closed - NO PAGE RELOAD');
+                            console.log('📊 [FORM SUBMIT] All logs above should still be visible');
                             logActivity('applicant', `Candidature soumise pour ${job.title.fr} par ${applicantName}`);
                             
                         } else {
@@ -9968,7 +10789,7 @@ document.addEventListener('DOMContentLoaded', function() {
     console.log('🚀 Initializing AE2I Ultra-Professional Website...');
     
     // Load saved data
-    loadSiteData();
+    loadSiteData().catch(err => console.error('Error loading site data:', err));
     
     // Initialize all systems
     initializeWebsite();

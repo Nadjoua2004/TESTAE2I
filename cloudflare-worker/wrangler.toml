@@ -6,3 +6,8 @@ workers_dev = true
 [[r2_buckets]]
 binding = "AE2I_BUCKET"
 bucket_name = "ae2i-cvs-algerie"
+
+# LinkedIn OAuth credentials
+# Set these using: wrangler secret put LINKEDIN_CLIENT_ID
+# Set these using: wrangler secret put LINKEDIN_CLIENT_SECRET
+# Set these using: wrangler secret put LINKEDIN_REDIRECT_URI (optional, defaults to worker URL)

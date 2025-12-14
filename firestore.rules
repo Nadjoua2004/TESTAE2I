@@ -58,6 +58,12 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
+    // Site Data - Full site data storage (admin only for write, authenticated read)
+    match /siteData/{documentId} {
+      allow read: if isAuthenticated(); // Authenticated users can read
+      allow write: if isAdmin(); // Only admin can write
+    }
+
     // Services - Admin can write, everyone can read
     match /services/{serviceId} {
       allow read: if true;
@@ -101,6 +107,30 @@ service cloud.firestore {
 
     // Custom Pages - Admin can write, everyone can read
     match /customPages/{pageId} {
+      allow read: if true;
+      allow create, update, delete: if isAdmin();
+    }
+
+    // Hero Settings - Admin can write, everyone can read
+    match /heroSettings/{documentId} {
+      allow read: if true;
+      allow create, update, delete: if isAdmin();
+    }
+
+    // ISO & Media - Admin can write, everyone can read
+    match /iso/{documentId} {
+      allow read: if true;
+      allow create, update, delete: if isAdmin();
+    }
+
+    // Theme - Admin can write, everyone can read
+    match /theme/{documentId} {
+      allow read: if true;
+      allow create, update, delete: if isAdmin();
+    }
+
+    // Images - Admin can write, everyone can read
+    match /images/{documentId} {
       allow read: if true;
       allow create, update, delete: if isAdmin();
     }

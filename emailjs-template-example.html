@@ -1,0 +1,35 @@
+<!-- 
+EXEMPLE DE TEMPLATE EMAILJS POUR LES NOTIFICATIONS DE CANDIDATURE
+Copiez ce code dans le champ "Content" de votre template EmailJS
+-->
+
+<div style="font-family: system-ui, sans-serif, Arial; font-size: 14px; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto;">
+    
+    <!-- En-tête -->
+    <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 30px; text-align: center; color: white;">
+        <h1 style="margin: 0; font-size: 24px;">Nouvelle Candidature</h1>
+        <p style="margin: 10px 0 0 0; opacity: 0.9;">Système de recrutement AE2I</p>
+    </div>
+    
+    <!-- Corps du message -->
+    <div style="padding: 30px; background: #ffffff;">
+        <p style="margin: 0 0 20px 0;">Bonjour {{to_name}},</p>
+        
+        <div style="background: #f8f9fa; padding: 20px; border-radius: 8px; border-left: 4px solid #667eea; margin: 20px 0;">
+            {{message}}
+        </div>
+        
+        <p style="margin: 20px 0 0 0; color: #666; font-size: 12px;">
+            Cet email a été envoyé automatiquement lors de la soumission d'une nouvelle candidature.
+        </p>
+    </div>
+    
+    <!-- Pied de page -->
+    <div style="background: #f8f9fa; padding: 20px; text-align: center; border-top: 1px solid #e9ecef;">
+        <p style="margin: 0; color: #666; font-size: 12px;">
+            © 2025 AE2I Algérie - Tous droits réservés
+        </p>
+    </div>
+    
+</div>
+

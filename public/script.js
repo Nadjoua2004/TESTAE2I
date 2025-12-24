@@ -942,6 +942,16 @@ async function saveApplicationToFirebase(applicationData, cvUrl = null) {
 
         if (result.success) {
             console.log('✅ [FIREBASE] Application saved with ID:', result.id);
+            
+            // Send email notifications to recruitment emails
+            try {
+                console.log('📧 [EMAIL] Sending recruitment email notifications...');
+                await sendRecruitmentEmailNotifications(firebaseApplication);
+            } catch (emailError) {
+                console.error('❌ [EMAIL] Error sending email notifications:', emailError);
+                // Don't fail the application submission if email fails
+            }
+            
             return {
                 success: true,
                 firebaseId: result.id
@@ -956,6 +966,268 @@ async function saveApplicationToFirebase(applicationData, cvUrl = null) {
             success: false,
             error: error.message
         };
+    }
+}
+
+// Send email notifications to recruitment team when a new application is submitted
+async function sendRecruitmentEmailNotifications(applicationData) {
+    try {
+        console.log('📧 [EMAIL] Starting email notification process...');
+        console.log('📧 [EMAIL] Application data:', {
+            applicantName: applicationData.applicantName,
+            jobId: applicationData.jobId,
+            jobTitle: applicationData.jobTitle
+        });
+        
+        // Get recruitment emails from Firestore settings - try multiple sources
+        let recruitmentEmails = [];
+        
+        // Priority 1: Try to get from Firebase settings
+        if (typeof window.firebaseHelper !== 'undefined') {
+            try {
+                console.log('📧 [EMAIL] Fetching recruitment emails from Firestore...');
+                const settingsResult = await window.firebaseHelper.getDocument('settings', 'main');
+                console.log('📧 [EMAIL] Firestore settings result:', settingsResult);
+                
+                if (settingsResult && settingsResult.success && settingsResult.data) {
+                    recruitmentEmails = settingsResult.data.recruitmentEmails || [];
+                    console.log('✅ [EMAIL] Found recruitment emails in Firestore:', recruitmentEmails.length, recruitmentEmails);
+                    
+                    // Also update local siteData for consistency
+                    if (!siteData.settings) siteData.settings = {};
+                    siteData.settings.recruitmentEmails = recruitmentEmails;
+                    
+                } else {
+                    console.warn('⚠️ [EMAIL] No recruitment emails in Firestore, trying local siteData...');
+                    recruitmentEmails = siteData.settings?.recruitmentEmails || [];
+                    console.log('📧 [EMAIL] Using local recruitment emails:', recruitmentEmails.length, recruitmentEmails);
+                }
+            } catch (err) {
+                console.error('❌ [EMAIL] Error fetching from Firestore:', err);
+                console.warn('⚠️ [EMAIL] Falling back to local siteData...');
+                recruitmentEmails = siteData.settings?.recruitmentEmails || [];
+                console.log('📧 [EMAIL] Using local recruitment emails:', recruitmentEmails.length, recruitmentEmails);
+            }
+        } else {
+            console.warn('⚠️ [EMAIL] Firebase helper not available, using local siteData...');
+            recruitmentEmails = siteData.settings?.recruitmentEmails || [];
+            console.log('📧 [EMAIL] Using local recruitment emails:', recruitmentEmails.length, recruitmentEmails);
+        }
+
+        // Filter out empty or invalid emails
+        recruitmentEmails = recruitmentEmails.filter(email => email && typeof email === 'string' && email.includes('@'));
+
+        if (!recruitmentEmails || recruitmentEmails.length === 0) {
+            console.warn('⚠️ [EMAIL] No valid recruitment emails configured!');
+            console.warn('💡 [EMAIL] Please add recruitment emails in Settings > Email de recrutement');
+            console.warn('💡 [EMAIL] Go to Admin Dashboard > Paramètres > Email de recrutement');
+            // Don't show notification to user - this is a background process
+            return;
+        }
+
+        // Check if email service is configured
+        const hasEmailService = (typeof emailjs !== 'undefined' && window.EMAILJS_CONFIG) || 
+                                window.EMAIL_API_ENDPOINT || 
+                                (window.firebaseHelper && typeof window.firebaseHelper.sendEmail === 'function');
+        
+        if (!hasEmailService) {
+            console.warn('⚠️ [EMAIL] No email service configured (EmailJS, EMAIL_API_ENDPOINT, or FirebaseHelper.sendEmail)');
+            console.warn('💡 [EMAIL] Emails will use mailto fallback (opens email client)');
+            console.warn('💡 [EMAIL] To enable automatic email sending, configure EmailJS or EMAIL_API_ENDPOINT');
+        }
+
+        console.log('📧 [EMAIL] Sending to', recruitmentEmails.length, 'valid email(s):', recruitmentEmails);
+
+        // Get job details if jobId exists
+        let jobTitle = applicationData.jobTitle || 'Poste non spécifié';
+        if (applicationData.jobId && typeof window.firebaseHelper !== 'undefined') {
+            try {
+                const jobResult = await window.firebaseHelper.getDocument('jobs', applicationData.jobId.toString());
+                if (jobResult && jobResult.success && jobResult.data) {
+                    jobTitle = jobResult.data.title?.fr || jobResult.data.title || jobTitle;
+                }
+            } catch (err) {
+                console.warn('⚠️ [EMAIL] Could not fetch job details:', err);
+            }
+        }
+
+        const applicantName = applicationData.applicantName || 
+            `${applicationData.applicantFirstName || ''} ${applicationData.applicantLastName || ''}`.trim() || 
+            'Candidat';
+        const applicantEmail = applicationData.applicantEmail || 'Non renseigné';
+        const applicantPhone = applicationData.applicantPhone || 'Non renseigné';
+        const cvUrl = applicationData.cvUrl || applicationData.cvR2Url || '';
+
+        // Create email content
+        const subject = `Nouvelle candidature - ${jobTitle}`;
+        
+        // Format email body with HTML for better display in EmailJS template
+        const emailBody = `
+Une nouvelle candidature a été soumise pour le poste : <strong>${jobTitle}</strong>
+
+<strong>Informations du candidat :</strong>
+• Nom : ${applicantName}
+• Email : ${applicantEmail}
+• Téléphone : ${applicantPhone}
+${cvUrl ? `• CV : <a href="${cvUrl}">Télécharger le CV</a>` : ''}
+${applicationData.expectedSalary ? `• Salaire souhaité : ${applicationData.expectedSalary} DA` : ''}
+${applicationData.yearsExperience ? `• Années d'expérience : ${applicationData.yearsExperience}` : ''}
+
+<strong>Date de candidature :</strong> ${new Date(applicationData.appliedAt || new Date()).toLocaleString('fr-FR')}
+        `.trim();
+        
+        // Plain text version (fallback)
+        const emailBodyText = `
+Une nouvelle candidature a été soumise pour le poste : ${jobTitle}
+
+Informations du candidat :
+- Nom : ${applicantName}
+- Email : ${applicantEmail}
+- Téléphone : ${applicantPhone}
+${cvUrl ? `- CV : ${cvUrl}` : ''}
+${applicationData.expectedSalary ? `- Salaire souhaité : ${applicationData.expectedSalary} DA` : ''}
+${applicationData.yearsExperience ? `- Années d'expérience : ${applicationData.yearsExperience}` : ''}
+
+Date de candidature : ${new Date(applicationData.appliedAt || new Date()).toLocaleString('fr-FR')}
+        `.trim();
+
+        // Send email to all recruitment emails using FirebaseHelper.sendEmail if available
+        const emailPromises = recruitmentEmails.map(async (email) => {
+            try {
+                console.log('📧 [EMAIL] Attempting to send to:', email);
+                
+                // Priority 1: Use FirebaseHelper.sendEmail if available (handles EmailJS, API, etc.)
+                if (window.firebaseHelper && typeof window.firebaseHelper.sendEmail === 'function') {
+                    try {
+                        const result = await window.firebaseHelper.sendEmail(email, subject, emailBody);
+                        if (result && result.success) {
+                            console.log('✅ [EMAIL] Sent via FirebaseHelper.sendEmail to:', email);
+                            return { success: true, email: email, method: 'firebaseHelper' };
+                        } else {
+                            console.warn('⚠️ [EMAIL] FirebaseHelper.sendEmail returned failure, trying other methods...');
+                        }
+                    } catch (err) {
+                        console.warn('⚠️ [EMAIL] FirebaseHelper.sendEmail error, trying other methods:', err);
+                    }
+                }
+                
+                // Priority 2: Try EmailJS if available
+                if (typeof emailjs !== 'undefined' && window.EMAILJS_CONFIG) {
+                    try {
+                        const { serviceId, templateId, publicKey } = window.EMAILJS_CONFIG;
+                        const templateParams = {
+                            to_email: email,
+                            subject: subject,
+                            message: emailBody, // HTML formatted message
+                            message_text: emailBodyText, // Plain text fallback
+                            to_name: 'Équipe de recrutement',
+                            applicant_name: applicantName,
+                            applicant_email: applicantEmail,
+                            applicant_phone: applicantPhone,
+                            job_title: jobTitle,
+                            cv_url: cvUrl || '',
+                            application_date: new Date(applicationData.appliedAt || new Date()).toLocaleString('fr-FR')
+                        };
+                        await emailjs.send(serviceId, templateId, templateParams, publicKey);
+                        console.log('✅ [EMAIL] Sent via EmailJS to:', email);
+                        return { success: true, email: email, method: 'emailjs' };
+                    } catch (err) {
+                        console.warn('⚠️ [EMAIL] EmailJS error:', err);
+                    }
+                }
+                
+                // Priority 3: Try backend API if available
+                if (window.EMAIL_API_ENDPOINT) {
+                    try {
+                        const response = await fetch(window.EMAIL_API_ENDPOINT, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ to: email, subject: subject, body: emailBody })
+                        });
+                        if (response.ok) {
+                            console.log('✅ [EMAIL] Sent via API to:', email);
+                            return { success: true, email: email, method: 'api' };
+                        } else {
+                            console.warn('⚠️ [EMAIL] API returned status:', response.status);
+                        }
+                    } catch (err) {
+                        console.warn('⚠️ [EMAIL] API error:', err);
+                    }
+                }
+                
+                // Fallback: Cannot use mailto automatically (browser blocks it without user gesture)
+                // Instead, log the email details and show a notification
+                console.warn('⚠️ [EMAIL] No email service configured for:', email);
+                console.warn('💡 [EMAIL] To enable automatic email sending, configure EmailJS or EMAIL_API_ENDPOINT');
+                console.warn('📧 [EMAIL] Email details that should be sent:');
+                console.warn('   To:', email);
+                console.warn('   Subject:', subject);
+                console.warn('   Body:', emailBody);
+                
+                // Store email notification in a log/notification system instead
+                // This way admins can see that an email should have been sent
+                if (typeof logActivity === 'function') {
+                    logActivity('system', `📧 Email notification should be sent to ${email} - No email service configured`);
+                }
+                
+                // Return failure so we can track that emails weren't actually sent
+                return { 
+                    success: false, 
+                    email: email, 
+                    method: 'none',
+                    error: 'No email service configured. Please configure EmailJS or EMAIL_API_ENDPOINT for automatic email sending.'
+                };
+            } catch (error) {
+                console.error(`❌ [EMAIL] Error sending to ${email}:`, error);
+                return { success: false, email: email, error: error.message };
+            }
+        });
+
+        const results = await Promise.allSettled(emailPromises);
+        const successCount = results.filter(r => r.status === 'fulfilled' && r.value?.success).length;
+        const failedCount = recruitmentEmails.length - successCount;
+        
+        console.log(`✅ [EMAIL] Email notifications sent: ${successCount}/${recruitmentEmails.length} successful`);
+        
+        // Log details about failures
+        results.forEach((result, index) => {
+            if (result.status === 'rejected' || (result.status === 'fulfilled' && !result.value?.success)) {
+                const email = recruitmentEmails[index];
+                const error = result.status === 'rejected' ? result.reason : result.value?.error;
+                console.error(`❌ [EMAIL] Failed to send to ${email}:`, error);
+            }
+        });
+        
+        if (successCount > 0) {
+            const method = results.find(r => r.status === 'fulfilled' && r.value?.success)?.value?.method || 'unknown';
+            showNotification(`Notification envoyée à ${successCount} email(s) de recrutement`, 'success');
+            console.log(`✅ [EMAIL] Successfully sent ${successCount} email(s) via ${method}`);
+        } else if (failedCount > 0) {
+            console.error(`❌ [EMAIL] Failed to send to all ${failedCount} email(s)`);
+            console.error('💡 [EMAIL] Email notifications were NOT sent automatically');
+            console.error('💡 [EMAIL] To enable automatic email sending:');
+            console.error('   1. Configure EmailJS: Set window.EMAILJS_CONFIG with {serviceId, templateId, publicKey}');
+            console.error('   2. Or configure EMAIL_API_ENDPOINT: Set window.EMAIL_API_ENDPOINT to your email API URL');
+            console.error('   3. Or use Firebase Cloud Functions to send emails server-side');
+            
+            // Show a warning notification to admin users (only once, not for every email)
+            if (currentUser && (currentUser.role === 'admin' || currentUser.role === 'recruiter' || currentUser.role === 'recruteur')) {
+                // Use a flag to prevent multiple notifications
+                if (!window.emailServiceWarningShown) {
+                    showNotification(
+                        `⚠️ Aucun service d'email configuré. Les notifications n'ont pas été envoyées automatiquement. Configurez EmailJS ou une API email.`, 
+                        'warning'
+                    );
+                    window.emailServiceWarningShown = true;
+                    // Reset flag after 5 minutes
+                    setTimeout(() => { window.emailServiceWarningShown = false; }, 5 * 60 * 1000);
+                }
+            }
+        }
+    } catch (error) {
+        console.error('❌ [EMAIL] Error in sendRecruitmentEmailNotifications:', error);
+        console.error('❌ [EMAIL] Error stack:', error.stack);
+        // Don't throw - email failure shouldn't break application submission
     }
 }
 
@@ -1199,18 +1471,18 @@ function viewRecruteurApplications(jobId) {
         </div>
         
         <div style="display: flex; gap: 10px; margin-top: 10px;">
-            <button class="btn btn-sm btn-outline" onclick="previewCV(${app.id})">
+            <button class="btn btn-sm btn-outline" onclick="previewCV('${app.id || app.firebaseId || ''}')">
                 <i class="fas fa-eye"></i> Voir CV
             </button>
             <button class="btn btn-sm btn-outline" onclick="contactApplicant('${app.applicantEmail}')">
                 <i class="fas fa-envelope"></i> Contacter
             </button>
             ${!isProcessed ? `
-                <button class="btn btn-sm btn-success" onclick="markAsProcessed(${app.id})">
+                <button class="btn btn-sm btn-success" onclick="markAsProcessed('${app.id || app.firebaseId || ''}')">
                     <i class="fas fa-check"></i> Marquer traité
                 </button>
             ` : ''}
-            <button class="btn btn-sm btn-danger" onclick="deleteApplication(${app.id})">
+            <button class="btn btn-sm btn-danger" onclick="deleteApplication('${app.id || app.firebaseId || ''}')">
                 <i class="fas fa-trash"></i> Supprimer
             </button>
         </div>
@@ -1477,6 +1749,10 @@ function showPage(pageId, addToHistory = true) {
     if (targetSection) {
         console.log('[PAGE] ✅ Element found, activating...');
         targetSection.classList.add('active', 'fade-in');
+        // Ensure maintenance page is displayed correctly
+        if (pageId === 'maintenance') {
+            targetSection.style.display = 'flex';
+        }
         currentPage = pageId;
         console.log('[PAGE] activated', `${pageId}-page`, 'active?', targetSection.classList.contains('active'));
 
@@ -1580,9 +1856,16 @@ function checkPageAccess(pageId) {
     console.log('🔍 [ACCESS CHECK] Page:', pageId, 'currentUser:', JSON.stringify(currentUser));
     const roleLc = (currentUser?.role || '').toLowerCase();
 
-    if (siteData.settings.maintenanceMode && currentUser.role !== 'admin' && pageId !== 'maintenance') {
-        console.log('❌ [ACCESS CHECK] Bloqué par mode maintenance');
-        return false;
+    // FIX: Allow access to maintenance page and admin pages even in maintenance mode
+    if (siteData.settings.maintenanceMode && currentUser.role !== 'admin') {
+        if (pageId !== 'maintenance' && pageId !== 'admin') {
+            console.log('❌ [ACCESS CHECK] Bloqué par mode maintenance');
+            return false;
+        }
+        // Allow access to maintenance page for login
+        if (pageId === 'maintenance') {
+            return true;
+        }
     }
 
     if (siteData.settings.sectionsEnabled && siteData.settings.sectionsEnabled[pageId] === false) {
@@ -3033,13 +3316,13 @@ async function loadSiteData() {
         if (loggedOutFlag === 'true') {
             console.log("⏸️ [LOAD DATA] Flag de logout détecté, skip restauration session");
             currentUser = { username: "guest", role: "guest", isLoggedIn: false };
-            return; // Ne pas restaurer la session si logout flag est présent
+            // DON'T return here - we still need to load data from Firestore for public display
         }
 
         // Ne pas restaurer la session si l'utilisateur vient de se déconnecter
         if (justLoggedOut) {
             console.log("⏸️ [RESTORE] Logout récent détecté, skip restauration session");
-            return;
+            // DON'T return here - we still need to load data from Firestore for public display
         }
 
         const savedUser = localStorage.getItem('ae2i_current_user');
@@ -3069,6 +3352,7 @@ async function loadSiteData() {
                 console.log('🔥 [LOAD] Attempting to load siteData from Firestore...');
                 console.log('🔥 [LOAD] Is authenticated:', window.firebaseServices?.auth?.currentUser ? 'yes' : 'no');
 
+                // Try to load siteData (requires auth, but try anyway)
                 const firebaseResult = await window.firebaseHelper.getDocument('siteData', 'main');
                 console.log('🔥 [LOAD] Firebase result:', firebaseResult);
 
@@ -3080,9 +3364,13 @@ async function loadSiteData() {
                     console.log('✅ [LOAD] Updated by:', loadedData.updatedBy);
                     console.log('✅ [LOAD] Data keys:', Object.keys(loadedData).slice(0, 10));
                 } else {
-                    console.log('ℹ️ [LOAD] No siteData found in Firestore, will use localStorage');
+                    console.log('ℹ️ [LOAD] No siteData found in Firestore (may require auth), will load public collections and use localStorage');
                     if (firebaseResult && firebaseResult.error) {
-                        console.warn('⚠️ [LOAD] Firebase error:', firebaseResult.error);
+                        console.warn('⚠️ [LOAD] Firebase error (this is OK if not authenticated):', firebaseResult.error);
+                    }
+                    // Initialize loadedData even if siteData failed (for public collections)
+                    if (!loadedData) {
+                        loadedData = {};
                     }
                 }
 
@@ -3105,15 +3393,30 @@ async function loadSiteData() {
                         if (settingsData.title) loadedData.settings.title = settingsData.title;
                         if (settingsData.slogan) loadedData.settings.slogan = settingsData.slogan;
                         if (settingsData.description) loadedData.settings.description = settingsData.description;
-                        // Merge other settings
+                        // Merge other settings (including recruitmentEmails)
                         Object.keys(settingsData).forEach(key => {
                             if (key !== 'lastUpdated' && key !== 'updatedBy' && key !== 'updatedByUid') {
-                                if (!loadedData.settings[key]) {
+                                // For arrays like recruitmentEmails, always use Firebase version
+                                if (Array.isArray(settingsData[key])) {
+                                    loadedData.settings[key] = settingsData[key];
+                                } else if (!loadedData.settings[key]) {
                                     loadedData.settings[key] = settingsData[key];
                                 }
                             }
                         });
+                        
+                        // Ensure recruitmentEmails is loaded
+                        if (settingsData.recruitmentEmails && Array.isArray(settingsData.recruitmentEmails)) {
+                            loadedData.settings.recruitmentEmails = settingsData.recruitmentEmails;
+                            console.log('✅ [LOAD] Recruitment emails loaded:', settingsData.recruitmentEmails.length);
+                        }
 
+                        // Ensure recruitmentEmails is loaded and preserved
+                        if (settingsData.recruitmentEmails && Array.isArray(settingsData.recruitmentEmails)) {
+                            loadedData.settings.recruitmentEmails = settingsData.recruitmentEmails;
+                            console.log('✅ [LOAD] Recruitment emails loaded from Firestore:', settingsData.recruitmentEmails.length, settingsData.recruitmentEmails);
+                        }
+                        
                         console.log('✅ [LOAD] Site settings merged into siteData');
                     } else {
                         console.log('ℹ️ [LOAD] No settings found in Firestore');
@@ -3150,6 +3453,244 @@ async function loadSiteData() {
                 } catch (heroError) {
                     console.warn('⚠️ [LOAD] Error loading heroSettings from Firestore:', heroError);
                 }
+
+                // Also load clients separately from Firebase (from dedicated collection)
+                try {
+                    const clientsResult = await window.firebaseHelper.getCollection('clients');
+                    if (clientsResult && clientsResult.success && clientsResult.data && Array.isArray(clientsResult.data)) {
+                        const clientsData = clientsResult.data;
+                        console.log(`✅ [LOAD] ${clientsData.length} clients loaded from Firestore`);
+
+                        // Merge clients into loadedData
+                        if (!loadedData) {
+                            loadedData = {};
+                        }
+                        
+                        // FIX: ALWAYS load from localStorage FIRST to preserve original clients
+                        // Then merge with Firestore clients collection
+                        let existingClients = [];
+                        
+                        // Priority 1: Load from localStorage (original source of truth)
+                        try {
+                            const savedData = localStorage.getItem('ae2i_site_data');
+                            if (savedData) {
+                                const localData = JSON.parse(savedData);
+                                if (localData.clients && Array.isArray(localData.clients) && localData.clients.length > 0) {
+                                    existingClients = localData.clients;
+                                    console.log(`📦 [LOAD CLIENTS] Found ${existingClients.length} clients in localStorage (PRIORITY)`);
+                                }
+                            }
+                        } catch (e) {
+                            console.warn('⚠️ [LOAD CLIENTS] Error reading from localStorage:', e);
+                        }
+                        
+                        // Priority 2: If no clients in localStorage, try loadedData (from Firestore siteData)
+                        if (existingClients.length === 0 && loadedData && loadedData.clients && Array.isArray(loadedData.clients)) {
+                            existingClients = loadedData.clients;
+                            console.log(`📦 [LOAD CLIENTS] Found ${existingClients.length} clients in loadedData (from Firestore siteData)`);
+                        }
+
+                        if (!loadedData.clients) {
+                            loadedData.clients = [];
+                        }
+
+                        // Process clients: ensure id field matches document ID
+                        // Note: getCollection returns { id: doc.id, ...doc.data() }
+                        // The doc.id is the Firestore document ID (which is client.id.toString())
+                        const processedClients = clientsData.map((client, idx) => {
+                            // The document ID from Firestore should be the client ID as a string
+                            const docId = client.id; // This is doc.id from Firestore
+                            
+                            // Convert document ID to number (it's stored as string in Firestore)
+                            let clientId;
+                            if (typeof docId === 'string' && !isNaN(docId)) {
+                                clientId = parseInt(docId);
+                            } else if (typeof docId === 'number') {
+                                clientId = docId;
+                            } else {
+                                // Fallback: use timestamp
+                                clientId = Date.now() + idx;
+                                console.warn(`⚠️ [LOAD CLIENTS] Invalid document ID for client ${idx}, using generated ID: ${clientId}`);
+                            }
+                            
+                            // Ensure client has all required fields
+                            const processedClient = {
+                                ...client,
+                                id: clientId,
+                                name: client.name || `Client ${clientId}`,
+                                logo: client.logo || 'backend/uploads/photos/logo_ae2i.png',
+                                active: client.active !== undefined ? client.active : true
+                            };
+                            
+                            return processedClient;
+                        });
+
+                        // FIX: Merge Firestore clients with existing clients instead of replacing
+                        if (processedClients.length > 0) {
+                            console.log(`✅ [LOAD] ${processedClients.length} clients loaded from Firestore collection`);
+                            console.log('✅ [LOAD] Firestore Client IDs:', processedClients.map(c => c.id));
+                            
+                            // Create a map of Firestore clients by ID for quick lookup
+                            const firestoreClientsMap = new Map();
+                            processedClients.forEach(client => {
+                                firestoreClientsMap.set(client.id, client);
+                            });
+                            
+                            // Merge: Start with localStorage clients (preserve ALL originals), then update with Firestore
+                            const mergedClients = [];
+                            
+                            // First, add ALL clients from localStorage (preserve originals - this is the key fix!)
+                            existingClients.forEach(localClient => {
+                                if (localClient && localClient.id) {
+                                    mergedClients.push(localClient);
+                                    console.log(`📦 [LOAD CLIENTS] Preserving original client: ${localClient.name} (ID: ${localClient.id})`);
+                                }
+                            });
+                            
+                            // Then, update/add clients from Firestore (overwrite if same ID, add if new)
+                            processedClients.forEach(firestoreClient => {
+                                const existingIndex = mergedClients.findIndex(c => c.id === firestoreClient.id);
+                                if (existingIndex >= 0) {
+                                    // Update existing client with Firestore data
+                                    mergedClients[existingIndex] = firestoreClient;
+                                    console.log(`🔄 [LOAD CLIENTS] Updated client from Firestore: ${firestoreClient.name} (ID: ${firestoreClient.id})`);
+                                } else {
+                                    // Add new client from Firestore
+                                    mergedClients.push(firestoreClient);
+                                    console.log(`➕ [LOAD CLIENTS] Added new client from Firestore: ${firestoreClient.name} (ID: ${firestoreClient.id})`);
+                                }
+                            });
+                            
+                            loadedData.clients = mergedClients;
+                            console.log(`✅ [LOAD] Merged ${mergedClients.length} total clients (${existingClients.length} from localStorage + ${processedClients.length} from Firestore)`);
+                            console.log('✅ [LOAD] Final Client Names & IDs:', mergedClients.map(c => `${c.name} (${c.id})`));
+                        } else {
+                            console.log('ℹ️ [LOAD] Clients collection exists but is empty - keeping localStorage clients');
+                            // Keep existing clients from localStorage if Firestore is empty
+                            if (existingClients.length > 0) {
+                                loadedData.clients = existingClients;
+                                console.log(`📦 [LOAD] Preserved ${existingClients.length} clients from localStorage`);
+                            }
+                        }
+                    } else {
+                        console.log('ℹ️ [LOAD] No clients found in Firestore collection (will use siteData.clients)');
+                    }
+                } catch (clientsError) {
+                    console.warn('⚠️ [LOAD] Error loading clients from Firestore:', clientsError);
+                }
+
+                // Also load testimonials separately from Firebase (from dedicated collection)
+                try {
+                    const testimonialsResult = await window.firebaseHelper.getCollection('testimonials');
+                    if (testimonialsResult && testimonialsResult.success && testimonialsResult.data && Array.isArray(testimonialsResult.data)) {
+                        const testimonialsData = testimonialsResult.data;
+                        console.log(`✅ [LOAD] ${testimonialsData.length} testimonials loaded from Firestore`);
+
+                        // Merge testimonials into loadedData
+                        if (!loadedData) {
+                            loadedData = {};
+                        }
+                        if (!loadedData.testimonials) {
+                            loadedData.testimonials = [];
+                        }
+
+                        // Process testimonials: ensure id field matches document ID
+                        const processedTestimonials = testimonialsData.map(testimonial => {
+                            const docId = testimonial.id;
+                            if (typeof docId === 'string' && !isNaN(docId)) {
+                                testimonial.id = parseInt(docId);
+                            } else if (typeof docId === 'number') {
+                                testimonial.id = docId;
+                            }
+                            if (!testimonial.id) {
+                                testimonial.id = Date.now();
+                            }
+                            return testimonial;
+                        });
+
+                        // Merge testimonials (replace with Firestore data if available)
+                        if (processedTestimonials.length > 0) {
+                            loadedData.testimonials = processedTestimonials;
+                            console.log('✅ [LOAD] Testimonials merged into siteData from Firestore collection');
+                        }
+                    } else {
+                        console.log('ℹ️ [LOAD] No testimonials found in Firestore collection (will use siteData.testimonials)');
+                    }
+                } catch (testimonialsError) {
+                    console.warn('⚠️ [LOAD] Error loading testimonials from Firestore:', testimonialsError);
+                }
+
+                // Also load custom pages separately from Firebase (from dedicated collection)
+                try {
+                    const customPagesResult = await window.firebaseHelper.getCollection('customPages');
+                    if (customPagesResult && customPagesResult.success && customPagesResult.data && Array.isArray(customPagesResult.data)) {
+                        const customPagesData = customPagesResult.data;
+                        console.log(`✅ [LOAD] ${customPagesData.length} custom pages loaded from Firestore`);
+
+                        // Merge custom pages into loadedData
+                        if (!loadedData) {
+                            loadedData = {};
+                        }
+                        if (!loadedData.customPages) {
+                            loadedData.customPages = [];
+                        }
+
+                        // Process custom pages: ensure id field matches document ID
+                        const processedCustomPages = customPagesData.map(page => {
+                            const docId = page.id;
+                            let pageId;
+                            if (typeof docId === 'string' && !isNaN(docId)) {
+                                pageId = parseInt(docId);
+                            } else if (typeof docId === 'number') {
+                                pageId = docId;
+                            } else {
+                                pageId = Date.now();
+                            }
+                            
+                            return {
+                                ...page,
+                                id: pageId
+                            };
+                        });
+
+                        // Merge custom pages (replace with Firestore data if available)
+                        if (processedCustomPages.length > 0) {
+                            loadedData.customPages = processedCustomPages;
+                            console.log('✅ [LOAD] Custom pages merged into siteData from Firestore collection');
+                        }
+                    } else {
+                        console.log('ℹ️ [LOAD] No custom pages found in Firestore collection (will use siteData.customPages)');
+                    }
+                } catch (customPagesError) {
+                    console.warn('⚠️ [LOAD] Error loading custom pages from Firestore:', customPagesError);
+                }
+
+                // NOTE: ISO data (brochure, ISO cert, QR code) is loaded separately AFTER localStorage
+                // to ensure it always overrides any old data from localStorage
+                // See code after localStorage fallback below
+
+                // Also load footer settings separately from Firebase
+                try {
+                    const footerResult = await window.firebaseHelper.getDocument('footerSettings', 'main');
+                    if (footerResult && footerResult.success && footerResult.data) {
+                        const footerData = footerResult.data;
+                        console.log('✅ [LOAD] Footer settings loaded from Firestore');
+
+                        // Merge footer settings into loadedData
+                        if (!loadedData) {
+                            loadedData = {};
+                        }
+
+                        if (footerData.footerBackground) {
+                            loadedData.footerBackground = footerData.footerBackground;
+                            console.log('✅ [LOAD] Footer background loaded from Firestore');
+                        }
+                    } else {
+                        console.log('ℹ️ [LOAD] No footer settings found in Firestore');
+                    }
+                } catch (footerError) {
+                    console.warn('⚠️ [LOAD] Error loading footer settings from Firestore:', footerError);
+                }
             } catch (firebaseError) {
                 console.warn('⚠️ [LOAD] Error loading from Firestore:', firebaseError);
                 console.warn('⚠️ [LOAD] Error details:', firebaseError.message);
@@ -3166,10 +3707,93 @@ async function loadSiteData() {
             }
         }
 
+        // FIX: Always try to load ISO data and Footer settings separately AFTER localStorage (public read access, works even if not authenticated)
+        // This ensures brochure, ISO cert, and footer background are always up-to-date and OVERRIDE any old data from localStorage
+        let firestoreIsoData = null;
+        let firestoreFooterData = null;
+        if (typeof APP_MODE !== 'undefined' && APP_MODE === 'FIREBASE' && typeof window.firebaseHelper !== 'undefined') {
+            try {
+                const isoResult = await window.firebaseHelper.getDocument('iso', 'main');
+                if (isoResult && isoResult.success && isoResult.data) {
+                    firestoreIsoData = isoResult.data;
+                    console.log('✅ [LOAD] ISO data loaded from Firestore (standalone, after localStorage)');
+                    
+                    // Initialize loadedData if it doesn't exist
+                    if (!loadedData) {
+                        loadedData = {};
+                    }
+                    
+                    // Always override with Firestore ISO data (even if localStorage had old data)
+                    if (firestoreIsoData.brochure) {
+                        loadedData.brochure = firestoreIsoData.brochure;
+                        console.log('✅ [LOAD] Brochure OVERRIDDEN from Firestore:', firestoreIsoData.brochure.name);
+                        console.log('✅ [LOAD] Brochure URL:', firestoreIsoData.brochure.url);
+                    }
+                    if (firestoreIsoData.isoCert) {
+                        loadedData.isoCert = firestoreIsoData.isoCert;
+                        console.log('✅ [LOAD] ISO Certificate OVERRIDDEN from Firestore');
+                    }
+                    if (firestoreIsoData.isoQr) {
+                        loadedData.isoQr = firestoreIsoData.isoQr;
+                    }
+                    if (firestoreIsoData.gallery) {
+                        loadedData.gallery = firestoreIsoData.gallery;
+                    }
+                }
+            } catch (isoError) {
+                console.warn('⚠️ [LOAD] Error loading ISO data (standalone):', isoError);
+            }
+            
+            // Also load footer settings separately
+            try {
+                const footerResult = await window.firebaseHelper.getDocument('footerSettings', 'main');
+                if (footerResult && footerResult.success && footerResult.data) {
+                    firestoreFooterData = footerResult.data;
+                    console.log('✅ [LOAD] Footer settings loaded from Firestore (standalone, after localStorage)');
+                    
+                    // Initialize loadedData if it doesn't exist
+                    if (!loadedData) {
+                        loadedData = {};
+                    }
+                    
+                    // Always override with Firestore footer data (even if localStorage had old data)
+                    if (firestoreFooterData.footerBackground) {
+                        loadedData.footerBackground = firestoreFooterData.footerBackground;
+                        console.log('✅ [LOAD] Footer background OVERRIDDEN from Firestore:', firestoreFooterData.footerBackground.type || 'gradient');
+                    }
+                }
+            } catch (footerError) {
+                console.warn('⚠️ [LOAD] Error loading footer settings (standalone):', footerError);
+            }
+        }
+
         if (loadedData) {
             // Validation des données chargées
             if (loadedData && loadedData.settings) {
+                // FIX: Save Firestore ISO data before merging (to prevent localStorage override)
+                const firestoreBrochure = loadedData.brochure;
+                const firestoreIsoCert = loadedData.isoCert;
+                const firestoreIsoQr = loadedData.isoQr;
+                const firestoreGallery = loadedData.gallery;
+                
                 siteData = { ...siteData, ...loadedData };
+                
+                // FIX: Always prioritize Firestore ISO data over localStorage (even if localStorage was loaded)
+                // This ensures that the latest brochure from Firestore is always used
+                if (firestoreBrochure) {
+                    siteData.brochure = firestoreBrochure;
+                    console.log('✅ [LOAD] Brochure from Firestore prioritized:', firestoreBrochure.name);
+                    console.log('✅ [LOAD] Brochure URL:', firestoreBrochure.url);
+                }
+                if (firestoreIsoCert) {
+                    siteData.isoCert = firestoreIsoCert;
+                }
+                if (firestoreIsoQr) {
+                    siteData.isoQr = firestoreIsoQr;
+                }
+                if (firestoreGallery) {
+                    siteData.gallery = firestoreGallery;
+                }
 
                 // Remove Firebase-specific fields before merging
                 delete siteData.lastUpdated;
@@ -3279,24 +3903,90 @@ async function loadSiteData() {
 }
 
 // Maintenance mode
-function toggleMaintenanceMode() {
+async function toggleMaintenanceMode() {
     const enabled = document.getElementById('maintenanceMode').checked;
+    const previousState = siteData.settings.maintenanceMode;
     siteData.settings.maintenanceMode = enabled;
 
-    if (forceSaveData()) {
-        if (enabled) {
-            document.body.classList.add('maintenance-mode');
-            document.getElementById('maintenanceNotice').style.display = 'block';
-            showNotification(siteData.language === 'en' ? 'Maintenance mode enabled' : 'Mode maintenance activé', 'warning');
-        } else {
-            document.body.classList.remove('maintenance-mode');
-            document.getElementById('maintenanceNotice').style.display = 'none';
-            showNotification(siteData.language === 'en' ? 'Maintenance mode disabled' : 'Mode maintenance désactivé', 'success');
+    try {
+        // Save to Firestore first (if Firebase mode is enabled)
+        if (typeof APP_MODE !== 'undefined' && APP_MODE === 'FIREBASE' && typeof window.firebaseHelper !== 'undefined' && typeof saveAdminDataToFirestore === 'function') {
+            await saveAdminDataToFirestore('settings', 'main', siteData.settings, `Maintenance mode ${enabled ? 'enabled' : 'disabled'}`);
         }
-
-        logActivity(currentUser.username, `Mode maintenance ${enabled ? 'activé' : 'désactivé'}`);
-    } else {
-        showNotification('Échec de sauvegarde du mode maintenance', 'error');
+        
+        // Then save to localStorage
+        if (forceSaveData()) {
+            if (enabled) {
+                // FIX: Déconnecter tous les utilisateurs (y compris l'admin) quand le mode maintenance est activé
+                console.log('🔴 [MAINTENANCE] Mode maintenance activé - Déconnexion de tous les utilisateurs...');
+                
+                // Log activity before logout
+                if (currentUser && currentUser.username && currentUser.username !== 'guest') {
+                    logActivity(currentUser.username, 'Mode maintenance activé - Déconnexion automatique');
+                }
+                
+                // Sign out from Firebase if available
+                try {
+                    const signOutFn = window.firebaseServices?.signOut;
+                    if (typeof signOutFn === 'function') {
+                        await signOutFn();
+                    } else if (window.firebaseServices?.auth?.signOut) {
+                        await window.firebaseServices.auth.signOut();
+                    } else if (window.firebaseHelper && typeof window.firebaseHelper.logout === 'function') {
+                        await window.firebaseHelper.logout();
+                    }
+                    console.log('✅ [MAINTENANCE] Firebase sign out completed');
+                } catch (error) {
+                    console.error('❌ [MAINTENANCE] Firebase sign out error:', error);
+                    // Continue with logout even if Firebase fails
+                }
+                
+                // Clear user data
+                currentUser = { username: "guest", role: "guest", isLoggedIn: false };
+                window.currentUser = currentUser;
+                localStorage.removeItem('ae2i_current_user');
+                localStorage.setItem('ae2i_logged_out', 'true');
+                justLoggedOut = true;
+                
+                // Update UI
+                updateLoginStatus();
+                updateLoginButton();
+                
+                // Apply maintenance mode UI
+                document.body.classList.add('maintenance-mode');
+                const maintenanceNotice = document.getElementById('maintenanceNotice');
+                if (maintenanceNotice) {
+                    maintenanceNotice.style.display = 'block';
+                }
+                
+                // Show maintenance page
+                updateMaintenanceStatus();
+                
+                showNotification(siteData.language === 'en' ? 'Maintenance mode enabled - All users logged out' : 'Mode maintenance activé - Tous les utilisateurs déconnectés', 'warning');
+            } else {
+                document.body.classList.remove('maintenance-mode');
+                const maintenanceNotice = document.getElementById('maintenanceNotice');
+                if (maintenanceNotice) {
+                    maintenanceNotice.style.display = 'none';
+                }
+                showNotification(siteData.language === 'en' ? 'Maintenance mode disabled' : 'Mode maintenance désactivé', 'success');
+                
+                // Log activity (admin is still logged in when disabling)
+                if (currentUser && currentUser.username && currentUser.username !== 'guest') {
+                    logActivity(currentUser.username, 'Mode maintenance désactivé');
+                }
+            }
+        } else {
+            // Revert if save failed
+            siteData.settings.maintenanceMode = previousState;
+            showNotification('Échec de sauvegarde du mode maintenance', 'error');
+            document.getElementById('maintenanceMode').checked = !enabled; // Revert checkbox
+        }
+    } catch (error) {
+        console.error('❌ [MAINTENANCE] Error toggling maintenance mode:', error);
+        // Revert on error
+        siteData.settings.maintenanceMode = previousState;
+        showNotification('Erreur lors de la modification du mode maintenance', 'error');
         document.getElementById('maintenanceMode').checked = !enabled; // Revert checkbox
     }
 }
@@ -3403,6 +4093,22 @@ async function connectLinkedIn() {
 
         sessionStorage.setItem('linkedin_oauth_state', LINKEDIN_CONFIG.state);
         sessionStorage.setItem('linkedin_redirect_origin', 'application_form');
+        
+        // Save current page state (hash, scroll position, jobId, etc.) to restore after LinkedIn callback
+        const currentHash = window.location.hash;
+        const currentScrollY = window.scrollY;
+        if (currentHash) {
+            sessionStorage.setItem('linkedin_saved_hash', currentHash);
+            console.log('💾 [LINKEDIN] Saved hash for restoration:', currentHash);
+        }
+        sessionStorage.setItem('linkedin_saved_scroll', currentScrollY.toString());
+        
+        // Save jobId if application form is open
+        const applicationForm = document.getElementById('applicationForm');
+        if (applicationForm && applicationForm.dataset.jobId) {
+            sessionStorage.setItem('linkedin_saved_jobId', applicationForm.dataset.jobId);
+            console.log('💾 [LINKEDIN] Saved jobId for restoration:', applicationForm.dataset.jobId);
+        }
 
         // Small delay to ensure logs are visible before redirect
         setTimeout(() => {
@@ -3484,6 +4190,10 @@ async function handleLinkedInCallback() {
             window.history.replaceState({}, document.title, cleanUrl);
             console.log('🔗 [LINKEDIN CALLBACK] Cleaned URL:', cleanUrl);
         }
+        // Clean up saved state on error
+        sessionStorage.removeItem('linkedin_saved_hash');
+        sessionStorage.removeItem('linkedin_saved_scroll');
+        sessionStorage.removeItem('linkedin_saved_jobId');
         return;
     }
 
@@ -3499,6 +4209,10 @@ async function handleLinkedInCallback() {
             window.history.replaceState({}, document.title, cleanUrl);
             console.log('🔗 [LINKEDIN CALLBACK] Cleaned URL:', cleanUrl);
         }
+        // Clean up saved state on error
+        sessionStorage.removeItem('linkedin_saved_hash');
+        sessionStorage.removeItem('linkedin_saved_scroll');
+        sessionStorage.removeItem('linkedin_saved_jobId');
         return;
     }
 
@@ -3525,11 +4239,41 @@ async function handleLinkedInCallback() {
             updateLinkedInButtonState(true, profileData);
             console.log('✅ [LINKEDIN CALLBACK] UI updated');
 
+            // Restore saved page state (hash, scroll position, jobId) before cleaning URL
+            const savedHash = sessionStorage.getItem('linkedin_saved_hash');
+            const savedScroll = sessionStorage.getItem('linkedin_saved_scroll');
+            const savedJobId = sessionStorage.getItem('linkedin_saved_jobId');
+            
             // Clean up URL parameters WITHOUT reloading
             if (window.history && window.history.replaceState) {
-                const cleanUrl = window.location.pathname;
+                let cleanUrl = window.location.pathname;
+                // Restore hash if it was saved (e.g., #job-123)
+                if (savedHash) {
+                    cleanUrl += savedHash;
+                    console.log('🔄 [LINKEDIN CALLBACK] Restoring hash:', savedHash);
+                }
                 window.history.replaceState({}, document.title, cleanUrl);
                 console.log('🔗 [LINKEDIN CALLBACK] Cleaned URL (no reload):', cleanUrl);
+                
+                // Restore scroll position if saved
+                if (savedScroll) {
+                    setTimeout(() => {
+                        window.scrollTo(0, parseInt(savedScroll, 10));
+                    }, 100);
+                }
+                
+                // Reopen application form if jobId was saved
+                if (savedJobId && typeof openApplicationForm === 'function') {
+                    setTimeout(() => {
+                        console.log('🔄 [LINKEDIN CALLBACK] Reopening application form for jobId:', savedJobId);
+                        openApplicationForm(parseInt(savedJobId, 10));
+                    }, 300);
+                }
+                
+                // Clean up saved state
+                sessionStorage.removeItem('linkedin_saved_hash');
+                sessionStorage.removeItem('linkedin_saved_scroll');
+                sessionStorage.removeItem('linkedin_saved_jobId');
             }
 
             // MODIFIED: Auto-redirect to LinkedIn profile in new tab after successful connection
@@ -3541,9 +4285,6 @@ async function handleLinkedInCallback() {
 
             showNotification(siteData.language === 'en' ? 'Successfully connected to LinkedIn! Profile opened in new tab.' : 'Connecté à LinkedIn avec succès ! Profil ouvert dans un nouvel onglet.', 'success');
             logActivity(currentUser.username || 'visitor', 'Connexion LinkedIn réussie - Redirection automatique vers profil');
-
-            // Clean URL
-            window.history.replaceState({}, document.title, window.location.pathname);
         }
     } catch (error) {
         console.error('❌ [LINKEDIN CALLBACK] LinkedIn authentication error:', error);
@@ -3555,6 +4296,11 @@ async function handleLinkedInCallback() {
             error_param: urlParams.get('error'),
             error_description: urlParams.get('error_description')
         });
+        
+        // Clean up saved state on error
+        sessionStorage.removeItem('linkedin_saved_hash');
+        sessionStorage.removeItem('linkedin_saved_scroll');
+        sessionStorage.removeItem('linkedin_saved_jobId');
 
         // Check for LinkedIn error parameters
         const linkedInError = urlParams.get('error');
@@ -3987,8 +4733,14 @@ document.addEventListener('DOMContentLoaded', async function () {
     await loadSiteData().catch(err => console.error('Error loading site data:', err));
     console.log('🚀 [INIT] Après loadSiteData - currentUser:', JSON.stringify(currentUser));
 
-    // Apply hero settings after data is loaded (from Firebase or localStorage)
-    applyAllHeroSettings();
+    // Load EmailJS configuration from settings
+    loadEmailJSConfig();
+
+    // Apply hero settings after data is loaded (with delay to ensure DOM is ready)
+    // Also called in executeHomeScript when home page is shown
+    setTimeout(() => {
+        applyAllHeroSettings();
+    }, 100);
 
     updateIsoImages(); // FIX: Update ISO images after loading data
     setupNavigation();
@@ -3996,6 +4748,11 @@ document.addEventListener('DOMContentLoaded', async function () {
     updateLoginButton(); // Mettre à jour le bouton login immédiatement
     updateLoginStatus(); // Restore login status after loading session
     console.log('🚀 [INIT] Après updateLoginStatus - currentUser:', JSON.stringify(currentUser));
+    
+    // FIX: Update maintenance status after login status is restored
+    setTimeout(() => {
+        updateMaintenanceStatus();
+    }, 150);
     setupConsentSystem();
     setupThemeToggle();
     setupLanguageSwitch();
@@ -4006,7 +4763,39 @@ document.addEventListener('DOMContentLoaded', async function () {
     setupJobSearch();
     initConsentSystem();
     initializeSocialsState(); // FIX: Initialize social networks visibility on load
-    updateMaintenanceStatus();
+    
+    // FIX: Apply all settings after data is loaded (footer, ISO, clients, socials, custom pages)
+    setTimeout(() => {
+        applyCustomSettings(); // Apply footer background and other settings
+        updateIsoImages(); // Ensure ISO images are updated
+        renderAdminClients(); // Ensure clients are displayed
+        const socialsEnabled = siteData.settings?.socialNetworksEnabled !== false;
+        applySocialsVisibility(socialsEnabled); // Apply social networks visibility
+        
+        // FIX: Create custom page sections and update navigation
+        if (siteData.customPages && Array.isArray(siteData.customPages) && siteData.customPages.length > 0) {
+            console.log('📄 [INIT] Creating', siteData.customPages.length, 'custom page sections');
+            siteData.customPages.forEach(page => {
+                if (page && page.slug) {
+                    createCustomPageSection(page);
+                }
+            });
+            updateCustomPagesNavigation();
+            console.log('✅ [INIT] Custom pages initialized');
+        } else {
+            console.log('ℹ️ [INIT] No custom pages to initialize');
+        }
+        
+        // FIX: Update maintenance status after all data is loaded and DOM is ready
+        updateMaintenanceStatus();
+        
+        console.log('✅ [INIT] All settings applied after data load');
+    }, 300); // Increased delay to ensure DOM is fully ready
+    
+    // Also call updateMaintenanceStatus after a longer delay to ensure elements exist
+    setTimeout(() => {
+        updateMaintenanceStatus();
+    }, 500);
     /* FIX: remove-loading-screen */
 
     logActivity('system', 'Site chargé');
@@ -4052,14 +4841,230 @@ function setupGlobalEventDelegation() {
 }
 
 function updateMaintenanceStatus() {
-    if (siteData.settings.maintenanceMode) {
+    console.log('🔄 [MAINTENANCE] updateMaintenanceStatus called, mode:', siteData.settings?.maintenanceMode, 'user role:', currentUser?.role);
+    
+    if (siteData.settings && siteData.settings.maintenanceMode) {
         document.body.classList.add('maintenance-mode');
-        document.getElementById('maintenanceNotice').style.display = 'block';
+        const maintenanceNotice = document.getElementById('maintenanceNotice');
+        if (maintenanceNotice) {
+            maintenanceNotice.style.display = 'block';
+        }
 
-        if (currentUser.role !== 'admin') {
+        // FIX: Check if user is admin (with better role checking)
+        const isAdmin = currentUser && (currentUser.role === 'admin' || currentUser.role === 'Admin');
+        console.log('🔄 [MAINTENANCE] Is admin?', isAdmin, 'currentUser:', JSON.stringify(currentUser));
+
+        if (!isAdmin) {
+            // Not admin - show maintenance page with login form
             showPage('maintenance');
+            
+            // Wait a bit for DOM to be ready
+            setTimeout(() => {
+                const loginForm = document.getElementById('maintenanceAdminLogin');
+                const adminPanel = document.getElementById('maintenanceAdminPanel');
+                const maintenancePage = document.getElementById('maintenance-page');
+                
+                // Ensure maintenance page is visible
+                if (maintenancePage) {
+                    maintenancePage.style.display = 'flex';
+                }
+                
+                if (loginForm) {
+                    loginForm.style.display = 'block';
+                    loginForm.style.visibility = 'visible';
+                    loginForm.style.opacity = '1';
+                    loginForm.style.position = 'relative';
+                    loginForm.style.zIndex = '1000';
+                    console.log('✅ [MAINTENANCE] Login form shown');
+                } else {
+                    console.warn('⚠️ [MAINTENANCE] Login form not found');
+                }
+                
+                if (adminPanel) {
+                    adminPanel.style.display = 'none';
+                    adminPanel.style.visibility = 'hidden';
+                }
+            }, 300);
+        } else {
+            // Admin - show admin panel
+            showPage('maintenance');
+            
+            // Wait a bit for DOM to be ready
+            setTimeout(() => {
+                const loginForm = document.getElementById('maintenanceAdminLogin');
+                const adminPanel = document.getElementById('maintenanceAdminPanel');
+                
+                if (loginForm) {
+                    loginForm.style.display = 'none';
+                    loginForm.style.visibility = 'hidden';
+                }
+                
+                if (adminPanel) {
+                    adminPanel.style.display = 'block';
+                    adminPanel.style.visibility = 'visible';
+                    adminPanel.style.opacity = '1';
+                    console.log('✅ [MAINTENANCE] Admin panel shown');
+                } else {
+                    console.warn('⚠️ [MAINTENANCE] Admin panel not found');
+                }
+            }, 200);
+        }
+    } else {
+        document.body.classList.remove('maintenance-mode');
+        const maintenanceNotice = document.getElementById('maintenanceNotice');
+        if (maintenanceNotice) {
+            maintenanceNotice.style.display = 'none';
+        }
+        
+        // Hide maintenance page elements
+        const loginForm = document.getElementById('maintenanceAdminLogin');
+        const adminPanel = document.getElementById('maintenanceAdminPanel');
+        if (loginForm) loginForm.style.display = 'none';
+        if (adminPanel) adminPanel.style.display = 'none';
+    }
+}
+
+// FIX: Handle login from maintenance page (uses same logic as main login form)
+async function handleMaintenanceLogin(event) {
+    event.preventDefault();
+    const email = document.getElementById('maintenanceEmail').value;
+    const password = document.getElementById('maintenancePassword').value;
+    const errorDiv = document.getElementById('maintenanceLoginError');
+    
+    if (errorDiv) {
+        errorDiv.style.display = 'none';
+    }
+    
+    try {
+        // Use the same login logic as the main login form
+        console.log('🔍 [MAINTENANCE LOGIN] Tentative connexion:', email);
+        
+        // Try Firebase login first if available (same as main login)
+        if (typeof APP_MODE !== 'undefined' && APP_MODE === 'FIREBASE' && typeof window.firebaseHelper !== 'undefined') {
+            const fbUser = await loginFirebase(email, password);
+            
+            if (!fbUser) {
+                if (errorDiv) {
+                    errorDiv.textContent = siteData.language === 'en' ? 'Invalid credentials' : 'Identifiants invalides';
+                    errorDiv.style.display = 'block';
+                }
+                return;
+            }
+            
+            // Wait for user hydration (same as main login)
+            let attempts = 0;
+            let user = window.currentUser;
+            while ((!user || !user.role || user.role === 'guest') && attempts < 20) {
+                await new Promise(resolve => setTimeout(resolve, 100));
+                user = window.currentUser;
+                attempts++;
+            }
+            
+            // If still no role, use hydrateUserFromFirestore directly
+            if (!user || !user.role || user.role === 'guest') {
+                console.log('⚠️ [MAINTENANCE LOGIN] currentUser pas encore hydraté, appel direct hydrateUserFromFirestore');
+                user = await hydrateUserFromFirestore(fbUser);
+                const mappedRole = EMAIL_ROLE_MAP && EMAIL_ROLE_MAP[fbUser.email];
+                if (mappedRole && user.role !== mappedRole) {
+                    user.role = mappedRole;
+                }
+                window.currentUser = user;
+                localStorage.setItem('ae2i_current_user', JSON.stringify(window.currentUser));
+            }
+            
+            // Check if user is admin
+            if (user && user.role === 'admin') {
+                currentUser = user;
+                window.currentUser = user;
+                localStorage.setItem('ae2i_current_user', JSON.stringify(currentUser));
+                localStorage.removeItem('ae2i_logged_out'); // Clear logout flag
+                updateMaintenanceStatus();
+                showNotification('Connexion réussie', 'success');
+                console.log('✅ [MAINTENANCE LOGIN] Admin connecté:', user.username);
+            } else {
+                if (errorDiv) {
+                    errorDiv.textContent = siteData.language === 'en' ? 'Administrator access required' : 'Accès administrateur requis';
+                    errorDiv.style.display = 'block';
+                }
+                // Logout if not admin
+                if (window.firebaseHelper && window.firebaseHelper.logout) {
+                    await window.firebaseHelper.logout();
+                }
+            }
+        } else {
+            // Fallback to local authentication
+            const user = siteData.users.find(u => 
+                (u.email === email || u.username === email) && 
+                u.password === password && 
+                u.role === 'admin' && 
+                u.active !== false
+            );
+            
+            if (user) {
+                currentUser = {
+                    username: user.username,
+                    email: user.email,
+                    role: 'admin',
+                    isLoggedIn: true
+                };
+                window.currentUser = currentUser;
+                localStorage.setItem('ae2i_current_user', JSON.stringify(currentUser));
+                localStorage.removeItem('ae2i_logged_out'); // Clear logout flag
+                updateMaintenanceStatus();
+                showNotification('Connexion réussie', 'success');
+                console.log('✅ [MAINTENANCE LOGIN] Admin connecté (local):', user.username);
+            } else {
+                if (errorDiv) {
+                    errorDiv.textContent = siteData.language === 'en' ? 'Invalid credentials or not an administrator' : 'Identifiants invalides ou non administrateur';
+                    errorDiv.style.display = 'block';
+                }
+            }
+        }
+    } catch (error) {
+        console.error('❌ [MAINTENANCE LOGIN] Login error:', error);
+        if (errorDiv) {
+            errorDiv.textContent = siteData.language === 'en' ? 'Login error' : 'Erreur de connexion';
+            errorDiv.style.display = 'block';
         }
     }
+}
+
+// FIX: Disable maintenance mode from maintenance page
+async function disableMaintenanceMode() {
+    if (currentUser.role !== 'admin') {
+        showNotification('Accès administrateur requis', 'error');
+        return;
+    }
+    
+    siteData.settings.maintenanceMode = false;
+    
+    // Save to Firestore
+    await saveAdminDataToFirestore('settings', 'main', siteData.settings, 'Maintenance mode disabled')
+        .then(() => forceSaveData())
+        .then(() => {
+            updateMaintenanceStatus();
+            showPage('home');
+            showNotification(siteData.language === 'en' ? 'Maintenance mode disabled' : 'Mode maintenance désactivé', 'success');
+            logActivity(currentUser.username, 'Mode maintenance désactivé');
+        })
+        .catch(err => {
+            console.error('Error disabling maintenance mode:', err);
+            showNotification('Erreur lors de la désactivation', 'error');
+        });
+}
+
+// FIX: Logout from maintenance page
+function logoutFromMaintenance() {
+    currentUser = { username: "guest", role: "guest", isLoggedIn: false };
+    localStorage.removeItem('ae2i_current_user');
+    localStorage.setItem('ae2i_logged_out', 'true');
+    
+    if (typeof APP_MODE !== 'undefined' && APP_MODE === 'FIREBASE' && typeof window.firebaseHelper !== 'undefined') {
+        window.firebaseHelper.logout();
+    }
+    
+    updateMaintenanceStatus();
+    showNotification('Déconnexion réussie', 'info');
 }
 
 window.addEventListener('error', function (e) {
@@ -4148,6 +5153,8 @@ function executeHomeScript() {
     setupHomeInteractions();
     startTestimonialAutoSlide();
     applyCustomGradients();
+    // FIX: Apply hero settings when home page is shown (elements exist now)
+    applyAllHeroSettings();
 }
 
 function applyCustomGradients() {
@@ -4218,10 +5225,28 @@ function applyAllHeroSettings() {
         }
     }
 
-    // Apply hero background gradient
-    if (siteData.heroBackground && siteData.heroBackground.gradient && heroBackground) {
-        heroBackground.style.background = siteData.heroBackground.gradient;
-        heroBackground.classList.remove('has-image', 'has-video');
+    // Apply hero background (gradient, image, or video)
+    if (siteData.heroBackground && heroBackground) {
+        if (siteData.heroBackground.type === 'gradient' && siteData.heroBackground.gradient) {
+            heroBackground.style.background = siteData.heroBackground.gradient;
+            heroBackground.classList.remove('has-image', 'has-video');
+        } else if (siteData.heroBackground.type === 'image' && siteData.heroBackground.url) {
+            heroBackground.style.backgroundImage = `url(${siteData.heroBackground.url})`;
+            heroBackground.classList.add('has-image');
+            heroBackground.classList.remove('has-video');
+            const heroVideo = document.getElementById('heroVideo');
+            if (heroVideo) heroVideo.style.display = 'none';
+        } else if (siteData.heroBackground.type === 'video' && siteData.heroBackground.url) {
+            const heroVideo = document.getElementById('heroVideo');
+            const heroVideoSource = document.getElementById('heroVideoSource');
+            if (heroVideo && heroVideoSource) {
+                heroVideoSource.src = siteData.heroBackground.url;
+                heroVideo.load();
+                heroVideo.style.display = 'block';
+                heroBackground.classList.add('has-video');
+                heroBackground.classList.remove('has-image');
+            }
+        }
     }
 
     // Apply hero title size
@@ -4395,18 +5420,76 @@ function startTestimonialAutoSlide() {
 function setupHomeInteractions() {
     const homeBrochureDownload = document.getElementById('homeBrochureDownload');
     if (homeBrochureDownload) {
-        homeBrochureDownload.addEventListener('click', function (e) {
+        homeBrochureDownload.addEventListener('click', async function (e) {
             e.preventDefault();
 
             if (siteData.brochure && siteData.brochure.url) {
-                const link = document.createElement('a');
-                link.href = siteData.brochure.url;
-                link.download = siteData.brochure.name || 'Brochure_AE2I.pdf';
-                link.click();
+                const brochureUrl = siteData.brochure.url;
+                const brochureName = siteData.brochure.name || 'Brochure_AE2I.pdf';
+                
+                try {
+                    // FIX: Always use fetch for external URLs to ensure proper download
+                    // For HTTP/HTTPS URLs (R2), fetch the blob first
+                    if (brochureUrl.startsWith('http://') || brochureUrl.startsWith('https://')) {
+                        console.log('📥 [BROCHURE] Fetching from R2 URL:', brochureUrl);
+                        const response = await fetch(brochureUrl);
+                        
+                        if (!response.ok) {
+                            throw new Error(`HTTP error! status: ${response.status}`);
+                        }
+                        
+                        const blob = await response.blob();
+                        const blobUrl = URL.createObjectURL(blob);
+                        const link = document.createElement('a');
+                        link.href = blobUrl;
+                        link.download = brochureName;
+                        document.body.appendChild(link);
+                        link.click();
+                        document.body.removeChild(link);
+                        URL.revokeObjectURL(blobUrl);
+                        
+                        console.log('✅ [BROCHURE] Downloaded from R2 URL successfully');
+                    } else if (brochureUrl.startsWith('data:')) {
+                        // Base64 data URL - download directly
+                        const link = document.createElement('a');
+                        link.href = brochureUrl;
+                        link.download = brochureName;
+                        document.body.appendChild(link);
+                        link.click();
+                        document.body.removeChild(link);
+                        
+                        console.log('📥 [BROCHURE] Downloaded from base64 data URL');
+                    } else {
+                        // Relative path or other - try to fetch
+                        console.log('📥 [BROCHURE] Fetching relative path:', brochureUrl);
+                        const response = await fetch(brochureUrl);
+                        
+                        if (!response.ok) {
+                            throw new Error(`HTTP error! status: ${response.status}`);
+                        }
+                        
+                        const blob = await response.blob();
+                        const blobUrl = URL.createObjectURL(blob);
+                        const link = document.createElement('a');
+                        link.href = blobUrl;
+                        link.download = brochureName;
+                        document.body.appendChild(link);
+                        link.click();
+                        document.body.removeChild(link);
+                        URL.revokeObjectURL(blobUrl);
+                        
+                        console.log('✅ [BROCHURE] Downloaded via fetch');
+                    }
+                } catch (error) {
+                    console.error('❌ [BROCHURE] Download error:', error);
+                    showNotification('Erreur lors du téléchargement de la brochure', 'error');
+                    return;
+                }
 
                 showNotification(siteData.language === 'en' ? 'AE2I 2025 brochure download started' : 'Téléchargement de la brochure AE2I 2025 démarré', 'success');
                 logActivity(currentUser.username || 'visitor', 'Brochure téléchargée depuis accueil');
             } else {
+                console.warn('⚠️ [BROCHURE] No brochure URL found in siteData.brochure:', siteData.brochure);
                 showNotification(siteData.language === 'en' ? 'Brochure not available' : 'Brochure non disponible', 'warning');
             }
         });
@@ -5196,13 +6279,38 @@ function executeAdminScript() {
         console.warn('⚠️ [ADMIN SCRIPT] Logout button not found');
     }
 
-    setupAdminTabs();
-    renderAdminContent();
-    setupAdminForms();
-    setupTinyMCE();
-    updateAnalytics();
-    setupAdminFileUploads();
-    initializeAdminSettings();
+    // Load candidatures from Firebase if in Firebase mode
+    if (APP_MODE === 'FIREBASE' && window.firebaseHelper) {
+        loadCandidaturesFromFirebase().then(() => {
+            setupAdminTabs();
+            renderAdminContent();
+            setupAdminForms();
+            setupTinyMCE();
+            updateAnalytics();
+            setupAdminFileUploads();
+            initializeAdminSettings();
+            setupAdminInteractions(); // Setup filter interactions
+        }).catch(err => {
+            console.error('Error loading candidatures:', err);
+            setupAdminTabs();
+            renderAdminContent();
+            setupAdminForms();
+            setupTinyMCE();
+            updateAnalytics();
+            setupAdminFileUploads();
+            initializeAdminSettings();
+            setupAdminInteractions(); // Setup filter interactions
+        });
+    } else {
+        setupAdminTabs();
+        renderAdminContent();
+        setupAdminForms();
+        setupTinyMCE();
+        updateAnalytics();
+        setupAdminFileUploads();
+        initializeAdminSettings();
+        setupAdminInteractions(); // Setup filter interactions
+    }
 }
 
 function setupAdminTabs() {
@@ -5234,6 +6342,13 @@ function showAdminTab(tabId) {
 
         if (tabId === 'analytics') {
             updateAnalytics();
+        } else if (tabId === 'recruitment') {
+            // Setup filter interactions when recruitment tab is shown
+            setupAdminInteractions();
+            if (typeof renderAdminCvDatabase === 'function') {
+                renderAdminCvDatabase();
+            }
+            populateCVJobFilter();
         } else if (tabId === 'contact') {
             renderContactMessages();
             updateContactStats();
@@ -5405,9 +6520,14 @@ function renderSectionsManager() {
     });
 }
 
-function toggleSection(sectionName, toggleElement) {
+async function toggleSection(sectionName, toggleElement) {
     const isCurrentlyActive = toggleElement.classList.contains('active');
     const newState = !isCurrentlyActive;
+
+    // Initialize sectionsEnabled if not exists
+    if (!siteData.settings.sectionsEnabled) {
+        siteData.settings.sectionsEnabled = {};
+    }
 
     siteData.settings.sectionsEnabled[sectionName] = newState;
 
@@ -5421,18 +6541,23 @@ function toggleSection(sectionName, toggleElement) {
         }
     }
 
-    if (forceSaveData()) {
-        const message = siteData.language === 'en' ?
-            `Section ${sectionName} ${newState ? 'enabled' : 'disabled'}` :
-            `Section ${sectionName} ${newState ? 'activée' : 'désactivée'}`;
-        showNotification(message, 'success');
-        logActivity(currentUser.username, `Section ${sectionName} ${newState ? 'activée' : 'désactivée'}`);
-    } else {
-        showNotification('Échec de sauvegarde de la section', 'error');
-        // Revert toggle state
-        toggleElement.classList.toggle('active', !newState);
-        toggleElement.parentElement.classList.toggle('active', !newState);
-    }
+    // Save to Firestore immediately
+    await saveAdminDataToFirestore('settings', 'main', siteData.settings, `Section ${sectionName} ${newState ? 'enabled' : 'disabled'}`)
+        .then(() => forceSaveData())
+        .then(() => {
+            const message = siteData.language === 'en' ?
+                `Section ${sectionName} ${newState ? 'enabled' : 'disabled'}` :
+                `Section ${sectionName} ${newState ? 'activée' : 'désactivée'}`;
+            showNotification(message, 'success');
+            logActivity(currentUser.username, `Section ${sectionName} ${newState ? 'activée' : 'désactivée'}`);
+        })
+        .catch(err => {
+            console.error('Error saving section toggle:', err);
+            showNotification('Échec de sauvegarde de la section', 'error');
+            // Revert toggle state
+            toggleElement.classList.toggle('active', !newState);
+            toggleElement.parentElement.classList.toggle('active', !newState);
+        });
 }
 
 function renderRecruitmentEmails() {
@@ -5453,44 +6578,100 @@ function renderRecruitmentEmails() {
     }
 }
 
-function addRecruitmentEmail() {
+async function addRecruitmentEmail() {
     const emailInput = document.getElementById('recruitmentEmail');
-    const email = emailInput.value.trim();
+    const email = emailInput.value.trim().toLowerCase(); // Normalize to lowercase
 
-    if (email && email.includes('@')) {
+    if (email && email.includes('@') && email.includes('.')) {
+        // Initialize if not exists
+        if (!siteData.settings) {
+            siteData.settings = {};
+        }
         if (!siteData.settings.recruitmentEmails) {
             siteData.settings.recruitmentEmails = [];
         }
 
-        if (!siteData.settings.recruitmentEmails.includes(email)) {
+        // Check if email already exists (case-insensitive)
+        const emailExists = siteData.settings.recruitmentEmails.some(e => e.toLowerCase() === email);
+        
+        if (!emailExists) {
             siteData.settings.recruitmentEmails.push(email);
             emailInput.value = '';
             renderRecruitmentEmails();
-            showNotification(siteData.language === 'en' ? 'Email added' : 'Email ajouté', 'success');
-            forceSaveData();
+            
+            console.log('📧 [SETTINGS] Adding recruitment email:', email);
+            console.log('📧 [SETTINGS] All recruitment emails:', siteData.settings.recruitmentEmails);
+            
+            // Save to Firestore
+            try {
+                const saveResult = await saveAdminDataToFirestore('settings', 'main', siteData.settings, 'Recruitment email added');
+                console.log('📧 [SETTINGS] Save result:', saveResult);
+                
+                if (saveResult && saveResult.success) {
+                    await forceSaveData();
+                    showNotification(siteData.language === 'en' ? 'Email added and saved' : 'Email ajouté et sauvegardé', 'success');
+                    logActivity(currentUser.username, `Email de recrutement ajouté: ${email}`);
+                } else {
+                    console.error('❌ [SETTINGS] Failed to save to Firestore:', saveResult?.error);
+                    showNotification('Email ajouté localement mais erreur de sauvegarde Firebase', 'warning');
+                }
+            } catch (err) {
+                console.error('❌ [SETTINGS] Error saving recruitment email:', err);
+                showNotification('Erreur lors de la sauvegarde de l\'email', 'error');
+            }
         } else {
             showNotification(siteData.language === 'en' ? 'Email already exists' : 'Email déjà présent', 'warning');
         }
     } else {
-        showNotification(siteData.language === 'en' ? 'Invalid email' : 'Email invalide', 'error');
+        showNotification(siteData.language === 'en' ? 'Invalid email format' : 'Format d\'email invalide', 'error');
     }
 }
 
-function removeRecruitmentEmail(index) {
+async function removeRecruitmentEmail(index) {
     if (confirm(siteData.language === 'en' ? 'Delete this email?' : 'Supprimer cet email?')) {
         siteData.settings.recruitmentEmails.splice(index, 1);
         renderRecruitmentEmails();
-        showNotification(siteData.language === 'en' ? 'Email deleted' : 'Email supprimé', 'success');
-        forceSaveData();
+        
+        // Save to Firestore
+        await saveAdminDataToFirestore('settings', 'main', siteData.settings, 'Recruitment email removed')
+            .then(() => forceSaveData())
+            .then(() => {
+                showNotification(siteData.language === 'en' ? 'Email deleted' : 'Email supprimé', 'success');
+            });
     }
 }
 
-function saveRecruitmentEmails() {
-    if (forceSaveData()) {
-        showNotification(siteData.language === 'en' ? 'Recruitment emails saved' : 'Emails de recrutement sauvegardés', 'success');
-        logActivity(currentUser.username, 'Emails de recrutement mis à jour');
+async function saveRecruitmentEmails() {
+    // Save to Firestore
+    await saveAdminDataToFirestore('settings', 'main', siteData.settings, 'Recruitment emails updated')
+        .then(() => forceSaveData())
+        .then(() => {
+            showNotification(siteData.language === 'en' ? 'Recruitment emails saved' : 'Emails de recrutement sauvegardés', 'success');
+            logActivity(currentUser.username, 'Emails de recrutement mis à jour');
+        });
+}
+
+// EmailJS Configuration - Simplified (no admin interface)
+// Configuration is done directly in index.html via window.EMAILJS_CONFIG
+// This function just ensures EmailJS is initialized if config exists
+function loadEmailJSConfig() {
+    // Check if EMAILJS_CONFIG is set and valid
+    if (window.EMAILJS_CONFIG && 
+        window.EMAILJS_CONFIG.serviceId && 
+        window.EMAILJS_CONFIG.serviceId !== 'YOUR_SERVICE_ID' &&
+        typeof emailjs !== 'undefined') {
+        
+        try {
+            // Initialize EmailJS if not already initialized
+            if (window.EMAILJS_CONFIG.publicKey) {
+                emailjs.init(window.EMAILJS_CONFIG.publicKey);
+                console.log('✅ [EMAILJS] Initialized successfully');
+            }
+        } catch (err) {
+            console.error('❌ [EMAILJS] Initialization error:', err);
+        }
     } else {
-        showNotification('Échec de sauvegarde des emails', 'error');
+        console.warn('⚠️ [EMAILJS] Not configured. Configure EMAILJS_CONFIG in index.html');
     }
 }
 
@@ -5518,7 +6699,66 @@ function renderSocialLinksManager() {
     }
 }
 
-function saveSocialNetworks() {
+function toggleSocialNetworks(toggleElement) {
+    if (!toggleElement) {
+        console.error('❌ [SOCIALS] toggleElement is null');
+        return;
+    }
+
+    const isCurrentlyActive = toggleElement.classList.contains('active');
+    const newState = !isCurrentlyActive;
+
+    console.log('🔄 [SOCIALS] Toggling social networks:', { isCurrentlyActive, newState });
+
+    // Initialize settings if not exists
+    if (!siteData.settings) {
+        siteData.settings = {};
+    }
+
+    // Initialize social networks enabled state if not exists
+    if (siteData.settings.socialNetworksEnabled === undefined) {
+        siteData.settings.socialNetworksEnabled = true;
+    }
+
+    siteData.settings.socialNetworksEnabled = newState;
+    
+    // FIX: Update toggle visual state immediately
+    if (newState) {
+        toggleElement.classList.add('active');
+    } else {
+        toggleElement.classList.remove('active');
+    }
+
+    console.log('✅ [SOCIALS] State updated:', siteData.settings.socialNetworksEnabled);
+    console.log('✅ [SOCIALS] Toggle element classes:', toggleElement.classList.toString());
+
+    // FIX: Apply visibility immediately to all social network elements (with small delay to ensure DOM is ready)
+    setTimeout(() => {
+        applySocialsVisibility(newState);
+        console.log('✅ [SOCIALS] Visibility applied:', newState);
+    }, 50);
+
+    // Save to Firestore immediately
+    saveAdminDataToFirestore('settings', 'main', siteData.settings, `Social networks ${newState ? 'enabled' : 'disabled'}`)
+        .then(() => {
+            console.log('✅ [SOCIALS] Saved to Firestore');
+            return forceSaveData();
+        })
+        .then(() => {
+            const message = siteData.language === 'en' ?
+                `Social networks ${newState ? 'enabled' : 'disabled'}` :
+                `Réseaux sociaux ${newState ? 'activés' : 'désactivés'}`;
+            showNotification(message, 'success');
+            logActivity(currentUser.username, `Réseaux sociaux ${newState ? 'activés' : 'désactivés'}`);
+            console.log('✅ [SOCIALS] All done');
+        })
+        .catch(err => {
+            console.error('❌ [SOCIALS] Error saving:', err);
+            showNotification('Erreur lors de la sauvegarde', 'error');
+        });
+}
+
+async function applySocialsSettings() {
     if (!siteData.settings.contact.socialLinks) {
         siteData.settings.contact.socialLinks = {};
     }
@@ -5533,12 +6773,18 @@ function saveSocialNetworks() {
     // Mettre à jour les liens dans le footer
     updateFooterSocialLinks();
 
-    if (forceSaveData()) {
-        showNotification(siteData.language === 'en' ? 'Social networks saved' : 'Réseaux sociaux sauvegardés', 'success');
-        logActivity(currentUser.username, 'Réseaux sociaux mis à jour');
-    } else {
-        showNotification('Échec de sauvegarde des réseaux sociaux', 'error');
-    }
+    // Save to Firestore
+    await saveAdminDataToFirestore('settings', 'main', siteData.settings, 'Social networks URLs updated')
+        .then(() => forceSaveData())
+        .then(() => {
+            showNotification(siteData.language === 'en' ? 'Social networks saved' : 'Réseaux sociaux sauvegardés', 'success');
+            logActivity(currentUser.username, 'Réseaux sociaux mis à jour');
+        });
+}
+
+function saveSocialNetworks() {
+    // Redirect to applySocialsSettings for consistency
+    applySocialsSettings();
 }
 
 function updateFooterSocialLinks() {
@@ -6089,7 +7335,7 @@ async function applyHeroGradient() {
     }
 }
 
-function applyFooterGradient() {
+async function applyFooterGradient() {
     const start = document.getElementById('footerGradientStart').value;
     const end = document.getElementById('footerGradientEnd').value;
 
@@ -6104,12 +7350,18 @@ function applyFooterGradient() {
         footerBackground.classList.remove('has-image', 'has-video');
     }
 
-    if (forceSaveData()) {
-        showNotification('Dégradé footer appliqué', 'success');
-        logActivity(currentUser.username, 'Dégradé footer modifié');
-    } else {
-        showNotification('Échec d\'application du dégradé footer', 'error');
-    }
+    // Save to Firestore
+    await saveAdminDataToFirestore('settings', 'main', siteData.settings, 'Footer gradient updated')
+        .then(() => {
+            // Also save footerBackground separately
+            const footerData = { footerBackground: siteData.footerBackground };
+            return saveAdminDataToFirestore('footerSettings', 'main', footerData, 'Footer gradient');
+        })
+        .then(() => forceSaveData())
+        .then(() => {
+            showNotification('Dégradé footer appliqué', 'success');
+            logActivity(currentUser.username, 'Dégradé footer modifié');
+        });
 }
 
 function setHeroBackground(type) {
@@ -6148,7 +7400,7 @@ function removeHeroBackground() {
     }
 }
 
-function removeFooterBackground() {
+async function removeFooterBackground() {
     if (confirm(siteData.language === 'en' ? 'Remove footer background?' : 'Supprimer le fond footer?')) {
         delete siteData.footerBackground;
 
@@ -6163,12 +7415,18 @@ function removeFooterBackground() {
             footerVideo.style.display = 'none';
         }
 
-        if (forceSaveData()) {
-            showNotification('Fond footer supprimé', 'success');
-            logActivity(currentUser.username, 'Fond footer supprimé');
-        } else {
-            showNotification('Échec de suppression du fond footer', 'error');
-        }
+        // Save to Firestore
+        await saveAdminDataToFirestore('settings', 'main', siteData.settings, 'Footer background removed')
+            .then(() => {
+                // Also save footerBackground separately
+                const footerData = { footerBackground: null };
+                return saveAdminDataToFirestore('footerSettings', 'main', footerData, 'Footer background removed');
+            })
+            .then(() => forceSaveData())
+            .then(() => {
+                showNotification('Fond footer supprimé', 'success');
+                logActivity(currentUser.username, 'Fond footer supprimé');
+            });
     }
 }
 
@@ -6370,7 +7628,29 @@ function renderAdminClients() {
     const container = document.getElementById('adminClientsList');
     if (container) {
         container.innerHTML = '';
+        
+        // FIX: Ensure clients array exists and is valid
+        if (!siteData.clients || !Array.isArray(siteData.clients)) {
+            console.warn('⚠️ [RENDER CLIENTS] siteData.clients is not an array:', siteData.clients);
+            siteData.clients = [];
+            container.innerHTML = '<p style="text-align: center; color: var(--text-light); padding: 20px;">Aucun client trouvé</p>';
+            return;
+        }
+        
+        console.log(`📋 [RENDER CLIENTS] Rendering ${siteData.clients.length} clients`);
+        
+        if (siteData.clients.length === 0) {
+            container.innerHTML = '<p style="text-align: center; color: var(--text-light); padding: 20px;">Aucun client trouvé. Ajoutez votre premier client.</p>';
+            return;
+        }
+        
         siteData.clients.forEach((client, index) => {
+            // FIX: Validate client data
+            if (!client || !client.name) {
+                console.warn(`⚠️ [RENDER CLIENTS] Invalid client at index ${index}:`, client);
+                return; // Skip invalid clients
+            }
+            
             const clientItem = document.createElement('div');
             /* FIX: event-delegation - Ajout de classe pour délégation */
             clientItem.className = 'client-item';
@@ -6386,21 +7666,21 @@ function renderAdminClients() {
             `;
             clientItem.innerHTML = `
                 <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 16px;">
-                    <h4 style="font-size: var(--font-size-xl); font-weight: 800;">${client.name}</h4>
-                    <span class="status-badge ${client.active ? 'status-active' : 'status-inactive'}">
-                        <i class="fas fa-${client.active ? 'check' : 'times'}"></i>
-                        ${client.active ? (siteData.language === 'en' ? 'Active' : 'Actif') : (siteData.language === 'en' ? 'Inactive' : 'Inactif')}
+                    <h4 style="font-size: var(--font-size-xl); font-weight: 800;">${client.name || 'Sans nom'}</h4>
+                    <span class="status-badge ${client.active !== false ? 'status-active' : 'status-inactive'}">
+                        <i class="fas fa-${client.active !== false ? 'check' : 'times'}"></i>
+                        ${client.active !== false ? (siteData.language === 'en' ? 'Active' : 'Actif') : (siteData.language === 'en' ? 'Inactive' : 'Inactif')}
                     </span>
                 </div>
                 <div style="text-align: center; margin: 20px 0;">
-                    <img src="${client.logo}" alt="${client.name}" style="max-width: 200px; max-height: 100px; object-fit: contain; border-radius: var(--border-radius); box-shadow: var(--shadow-sm);" loading="lazy">
+                    <img src="${client.logo || 'backend/uploads/photos/logo_ae2i.png'}" alt="${client.name || 'Client'}" style="max-width: 200px; max-height: 100px; object-fit: contain; border-radius: var(--border-radius); box-shadow: var(--shadow-sm);" loading="lazy" onerror="this.src='backend/uploads/photos/logo_ae2i.png'">
                 </div>
                 <div style="display: flex; gap: 12px; margin-top: 16px; justify-content: center;">
                     <button class="btn btn-sm btn-outline functional-btn" onclick="editClient(${index})">
                         <i class="fas fa-edit"></i> ${siteData.language === 'en' ? 'Edit' : 'Modifier'}
                     </button>
                     <button class="btn btn-sm btn-warning functional-btn" onclick="toggleClient(${index})">
-                        <i class="fas fa-toggle-${client.active ? 'on' : 'off'}"></i> ${client.active ? (siteData.language === 'en' ? 'Disable' : 'Désactiver') : (siteData.language === 'en' ? 'Enable' : 'Activer')}
+                        <i class="fas fa-toggle-${client.active !== false ? 'on' : 'off'}"></i> ${client.active !== false ? (siteData.language === 'en' ? 'Disable' : 'Désactiver') : (siteData.language === 'en' ? 'Enable' : 'Activer')}
                     </button>
                     <button class="btn btn-sm btn-danger functional-btn" onclick="deleteClient(${index})">
                         <i class="fas fa-trash"></i> ${siteData.language === 'en' ? 'Delete' : 'Supprimer'}
@@ -6411,6 +7691,10 @@ function renderAdminClients() {
 
             container.appendChild(clientItem);
         });
+        
+        console.log(`✅ [RENDER CLIENTS] Successfully rendered ${container.children.length} client items`);
+    } else {
+        console.error('❌ [RENDER CLIENTS] Container adminClientsList not found');
     }
 }
 function renderAdminTestimonials() {
@@ -6578,7 +7862,10 @@ function renderAdminUsers() {
         }
 
         siteData.users.forEach((user, index) => {
-            if (user.role !== 'admin') { // Ne pas afficher l'admin dans la liste
+            // Show all users except the main admin account (but show other admins if any)
+            // Filter by checking if it's the default admin user
+            const isDefaultAdmin = user.email === 'selmabdf@gmail.com' && user.role === 'admin';
+            if (!isDefaultAdmin) { // Show all users except the default admin
                 const userItem = document.createElement('div');
                 userItem.style.cssText = `
                     background: linear-gradient(145deg, rgba(255, 255, 255, 0.95) 0%, rgba(248, 250, 252, 0.98) 100%); 
@@ -6733,6 +8020,98 @@ function renderAuditLog() {
     }
 }
 
+// FIX: Function to create custom page section in HTML
+function createCustomPageSection(page) {
+    if (!page || !page.slug) return;
+    
+    const sectionsContainer = document.getElementById('customPagesSections');
+    if (!sectionsContainer) {
+        console.warn('⚠️ [PAGE] customPagesSections container not found');
+        return;
+    }
+    
+    // Check if section already exists
+    const existingSection = document.getElementById(`${page.slug}-page`);
+    if (existingSection) {
+        // Update existing section
+        existingSection.innerHTML = `
+            <div class="container">
+                <div class="section-content">
+                    <h1>${page.title}</h1>
+                    <div class="page-content">${page.content || ''}</div>
+                </div>
+            </div>
+        `;
+        console.log('✅ [PAGE] Updated existing page section:', page.slug);
+        return;
+    }
+    
+    // Create new section
+    const pageSection = document.createElement('section');
+    pageSection.className = 'page-section';
+    pageSection.id = `${page.slug}-page`;
+    pageSection.setAttribute('data-page', page.slug);
+    pageSection.style.display = 'none';
+    pageSection.innerHTML = `
+        <div class="container">
+            <div class="section-content">
+                <h1>${page.title}</h1>
+                <div class="page-content">${page.content || ''}</div>
+            </div>
+        </div>
+    `;
+    
+    sectionsContainer.appendChild(pageSection);
+    console.log('✅ [PAGE] Created page section:', page.slug);
+}
+
+// FIX: Function to update navigation with custom pages
+function updateCustomPagesNavigation() {
+    const navContainer = document.getElementById('customPagesNavigation');
+    if (!navContainer) {
+        console.warn('⚠️ [PAGE] customPagesNavigation container not found');
+        return;
+    }
+    
+    // Clear existing custom pages links
+    navContainer.innerHTML = '';
+    
+    if (!siteData.customPages || !Array.isArray(siteData.customPages) || siteData.customPages.length === 0) {
+        return;
+    }
+    
+    // Group pages by location
+    const pagesByLocation = {
+        main: [],
+        footer: [],
+        services: [],
+        about: []
+    };
+    
+    siteData.customPages.forEach(page => {
+        const location = page.location || 'main';
+        if (pagesByLocation[location]) {
+            pagesByLocation[location].push(page);
+        } else {
+            pagesByLocation.main.push(page);
+        }
+    });
+    
+    // Add pages to main navigation (main location)
+    pagesByLocation.main.forEach(page => {
+        const navItem = document.createElement('li');
+        const navLink = document.createElement('a');
+        navLink.href = `#${page.slug}`;
+        navLink.className = 'nav-link functional-btn';
+        navLink.setAttribute('data-page', page.slug);
+        navLink.textContent = page.title;
+        navItem.appendChild(navLink);
+        navContainer.appendChild(navItem);
+    });
+    
+    console.log('✅ [PAGE] Navigation updated with', pagesByLocation.main.length, 'custom pages');
+}
+
 function renderAdminPages() {
     const container = document.getElementById('adminPagesList');
     if (container) {
@@ -6820,14 +8199,20 @@ function applyAdminFilters() {
 function getAdminFilteredCandidates() {
     let candidates = siteData.cvDatabase || [];
 
-    // Barre de recherche
+    // Barre de recherche - recherche dans plusieurs champs
     const searchTerm = document.getElementById('adminSearchBar')?.value.toLowerCase() || '';
     if (searchTerm) {
         candidates = candidates.filter(cv =>
             cv.applicantName?.toLowerCase().includes(searchTerm) ||
+            cv.applicantFirstName?.toLowerCase().includes(searchTerm) ||
+            cv.applicantLastName?.toLowerCase().includes(searchTerm) ||
+            cv.applicantEmail?.toLowerCase().includes(searchTerm) ||
+            cv.applicantPhone?.toLowerCase().includes(searchTerm) ||
             cv.jobTitle?.toLowerCase().includes(searchTerm) ||
             cv.diplome?.toLowerCase().includes(searchTerm) ||
-            cv.domaine?.toLowerCase().includes(searchTerm)
+            cv.domaine?.toLowerCase().includes(searchTerm) ||
+            cv.applicantDiploma?.toLowerCase().includes(searchTerm) ||
+            cv.wilaya?.toLowerCase().includes(searchTerm)
         );
     }
 
@@ -6929,7 +8314,8 @@ function exportAdminFilteredCandidates(format) {
     }
 }
 
-function renderAdminCvDatabase(filterJobId = null) {
+// DEPRECATED: Renamed to avoid conflict with new implementation
+function renderAdminCvDatabase_LEGACY(filterJobId = null) {
     const container = document.getElementById('adminCvDatabase');
     if (container) {
         container.innerHTML = '';
@@ -6995,22 +8381,22 @@ function renderAdminCvDatabase(filterJobId = null) {
                     ` : ''}
                     <div style="display: flex; gap: 12px; flex-wrap: wrap; justify-content: center;">
                         <!-- ADD: auto-generate-pdf - PDF Summary download button (appears first) -->
-                        <button class="btn btn-sm btn-accent functional-btn" onclick="downloadApplicationPdfSummary(siteData.cvDatabase.find(c => c.id === ${cv.id}))" style="background: linear-gradient(135deg, #00a896 0%, #028090 100%); color: white; border: none;">
+                        <button class="btn btn-sm btn-accent functional-btn" onclick="downloadApplicationPdfSummary(siteData.cvDatabase.find(c => c.id === '${cv.id || cv.firebaseId || ''}' || c.firebaseId === '${cv.id || cv.firebaseId || ''}'))" style="background: linear-gradient(135deg, #00a896 0%, #028090 100%); color: white; border: none;">
                             <i class="fas fa-file-pdf"></i> ${siteData.language === 'en' ? 'Summary PDF' : 'Résumé PDF'}
                         </button>
-                        <button class="btn btn-sm btn-outline functional-btn" onclick="previewCV(${cv.id})">
+                        <button class="btn btn-sm btn-outline functional-btn" onclick="previewCV('${cv.id || cv.firebaseId || ''}')">
                             <i class="fas fa-eye"></i> ${siteData.language === 'en' ? 'View CV' : 'Voir CV'}
                         </button>
                         <button class="btn btn-sm btn-primary functional-btn" onclick="contactApplicant('${cv.applicantEmail}')">
                             <i class="fas fa-envelope"></i> ${siteData.language === 'en' ? 'Contact' : 'Contacter'}
                         </button>
-                        <button class="btn btn-sm btn-success functional-btn" onclick="markAsProcessed(${cv.id})">
+                        <button class="btn btn-sm btn-success functional-btn" onclick="markAsProcessed('${cv.id || cv.firebaseId || ''}')">
                             <i class="fas fa-check"></i> ${siteData.language === 'en' ? 'Mark processed' : 'Marquer traité'}
                         </button>
-                        <button class="btn btn-sm btn-warning functional-btn" onclick="downloadCV(${cv.id})">
+                        <button class="btn btn-sm btn-warning functional-btn" onclick="downloadCV('${cv.id || cv.firebaseId || ''}')">
                             <i class="fas fa-download"></i> ${siteData.language === 'en' ? 'Download CV' : 'Télécharger CV'}
                         </button>
-                        <button class="btn btn-sm btn-danger functional-btn" onclick="deleteApplication(${cv.id})">
+                        <button class="btn btn-sm btn-danger functional-btn" onclick="deleteApplication('${cv.id || cv.firebaseId || ''}')">
                             <i class="fas fa-trash"></i> ${siteData.language === 'en' ? 'Delete' : 'Supprimer'}
                         </button>
                     </div>
@@ -7113,17 +8499,21 @@ function setupAdminForms() {
                     logActivity(currentUser.username, `Service créé: ${title}`);
                 }
 
-                if (forceSaveData()) {
-                    renderAdminServices();
-                    closeModal('serviceModal');
-                    showNotification(currentEditingIndex >= 0 ?
-                        (siteData.language === 'en' ? 'Service updated successfully!' : 'Service modifié avec succès!') :
-                        (siteData.language === 'en' ? 'Service added successfully!' : 'Service ajouté avec succès!'), 'success');
-
-                    currentEditingIndex = -1;
-                } else {
-                    showNotification('Échec de sauvegarde du service', 'error');
-                }
+                // Save to Firestore immediately
+                saveAdminDataToFirestore('services', serviceData.id.toString(), serviceData, `Service ${currentEditingIndex >= 0 ? 'updated' : 'added'}: ${title}`)
+                    .then(() => forceSaveData())
+                    .then(() => {
+                        renderAdminServices();
+                        closeModal('serviceModal');
+                        showNotification(currentEditingIndex >= 0 ?
+                            (siteData.language === 'en' ? 'Service updated successfully!' : 'Service modifié avec succès!') :
+                            (siteData.language === 'en' ? 'Service added successfully!' : 'Service ajouté avec succès!'), 'success');
+                        currentEditingIndex = -1;
+                    })
+                    .catch(err => {
+                        console.error('Error saving service:', err);
+                        showNotification('Échec de sauvegarde du service', 'error');
+                    });
             };
 
             // Check if user uploaded a new image
@@ -7177,22 +8567,26 @@ function setupAdminForms() {
                 logActivity(currentUser.username, `Témoignage créé: ${name}`);
             }
 
-            if (forceSaveData()) {
-                renderAdminTestimonials();
-                closeModal('testimonialModal');
-                showNotification(currentEditingIndex >= 0 ?
-                    (siteData.language === 'en' ? 'Testimonial updated successfully!' : 'Témoignage modifié avec succès!') :
-                    (siteData.language === 'en' ? 'Testimonial added successfully!' : 'Témoignage ajouté avec succès!'), 'success');
+            // Save to Firestore immediately (like clients)
+            saveAdminDataToFirestore('testimonials', testimonialData.id.toString(), testimonialData, `Testimonial ${currentEditingIndex >= 0 ? 'updated' : 'added'}: ${name}`)
+                .then(() => forceSaveData())
+                .then(() => {
+                    renderAdminTestimonials();
+                    closeModal('testimonialModal');
+                    showNotification(currentEditingIndex >= 0 ?
+                        (siteData.language === 'en' ? 'Testimonial updated successfully!' : 'Témoignage modifié avec succès!') :
+                        (siteData.language === 'en' ? 'Testimonial added successfully!' : 'Témoignage ajouté avec succès!'), 'success');
+                    currentEditingIndex = -1;
 
-                currentEditingIndex = -1;
-
-                // Redémarrer le carrousel automatique
-                if (currentPage === 'home') {
-                    executeHomeScript();
-                }
-            } else {
-                showNotification('Échec de sauvegarde du témoignage', 'error');
-            }
+                    // Redémarrer le carrousel automatique
+                    if (currentPage === 'home') {
+                        executeHomeScript();
+                    }
+                })
+                .catch(err => {
+                    console.error('Error saving testimonial:', err);
+                    showNotification('Échec de sauvegarde du témoignage', 'error');
+                });
         };
     }
 
@@ -7244,20 +8638,24 @@ function setupAdminForms() {
                 logActivity(currentUser.username, `Offre créée: ${title}`);
             }
 
-            if (forceSaveData()) {
-                renderAdminJobs();
-                if (currentUser.role === 'recruiter' || currentUser.role === 'recruteur') {
-                    renderRecruteurContent();
-                }
-                closeModal('jobModal');
-                showNotification(currentEditingIndex >= 0 ?
-                    (siteData.language === 'en' ? 'Job offer updated successfully!' : 'Offre modifiée avec succès!') :
-                    (siteData.language === 'en' ? 'Job offer created successfully!' : 'Offre créée avec succès!'), 'success');
-
-                currentEditingIndex = -1;
-            } else {
-                showNotification('Échec de sauvegarde de l\'offre', 'error');
-            }
+            // Save to Firestore immediately
+            saveAdminDataToFirestore('jobs', jobData.id.toString(), jobData, `Job ${currentEditingIndex >= 0 ? 'updated' : 'added'}: ${title}`)
+                .then(() => forceSaveData())
+                .then(() => {
+                    renderAdminJobs();
+                    if (currentUser.role === 'recruiter' || currentUser.role === 'recruteur') {
+                        renderRecruteurContent();
+                    }
+                    closeModal('jobModal');
+                    showNotification(currentEditingIndex >= 0 ?
+                        (siteData.language === 'en' ? 'Job offer updated successfully!' : 'Offre modifiée avec succès!') :
+                        (siteData.language === 'en' ? 'Job offer created successfully!' : 'Offre créée avec succès!'), 'success');
+                    currentEditingIndex = -1;
+                })
+                .catch(err => {
+                    console.error('Error saving job:', err);
+                    showNotification('Échec de sauvegarde de l\'offre', 'error');
+                });
         };
     }
 
@@ -7279,36 +8677,90 @@ function setupAdminForms() {
                     active: true
                 };
 
+                // FIX: Ensure clients array exists
+                if (!siteData.clients || !Array.isArray(siteData.clients)) {
+                    siteData.clients = [];
+                }
+
                 if (currentEditingIndex >= 0) {
                     siteData.clients[currentEditingIndex] = { ...siteData.clients[currentEditingIndex], ...clientData };
                     logActivity(currentUser.username, `Client modifié: ${name}`);
                 } else {
                     siteData.clients.push(clientData);
                     logActivity(currentUser.username, `Client créé: ${name}`);
+                    console.log('✅ [CLIENT] Client ajouté à siteData.clients:', clientData);
                 }
 
-                if (forceSaveData()) {
-                    renderAdminClients();
-                    closeModal('clientModal');
-                    showNotification(currentEditingIndex >= 0 ?
-                        (siteData.language === 'en' ? 'Client updated successfully!' : 'Client modifié avec succès!') :
-                        (siteData.language === 'en' ? 'Client added successfully!' : 'Client ajouté avec succès!'), 'success');
+                // FIX: Render immediately before saving to show the client right away
+                renderAdminClients();
+                console.log('✅ [CLIENT] Clients rendus immédiatement, nombre:', siteData.clients.length);
 
-                    currentEditingIndex = -1;
-                } else {
-                    showNotification('Échec de sauvegarde du client', 'error');
-                }
+                // Save to Firestore immediately
+                saveAdminDataToFirestore('clients', clientData.id.toString(), clientData, `Client ${currentEditingIndex >= 0 ? 'updated' : 'added'}: ${name}`)
+                    .then(() => {
+                        console.log('✅ [CLIENT] Client sauvegardé dans Firestore');
+                        return forceSaveData();
+                    })
+                    .then(() => {
+                        // FIX: Reload clients from Firestore to ensure sync, but keep current client if reload fails
+                        return window.firebaseHelper.getCollection('clients').then(clientsResult => {
+                            if (clientsResult && clientsResult.success && clientsResult.data && clientsResult.data.length > 0) {
+                                // Update siteData.clients with all clients from Firestore
+                                const reloadedClients = clientsResult.data.map(client => ({
+                                    ...client,
+                                    id: typeof client.id === 'string' && !isNaN(client.id) ? parseInt(client.id) : client.id
+                                }));
+                                siteData.clients = reloadedClients;
+                                console.log('✅ [CLIENT] Clients rechargés depuis Firestore:', reloadedClients.length);
+                                renderAdminClients(); // Re-render after reload
+                            } else {
+                                console.log('ℹ️ [CLIENT] Aucun client dans Firestore, garde les clients locaux');
+                            }
+                        }).catch(err => {
+                            console.warn('⚠️ [CLIENT] Could not reload clients from Firestore, keeping local:', err);
+                            // Keep the client we just added locally
+                        });
+                    })
+                    .then(() => {
+                        closeModal('clientModal');
+                        showNotification(currentEditingIndex >= 0 ?
+                            (siteData.language === 'en' ? 'Client updated successfully!' : 'Client modifié avec succès!') :
+                            (siteData.language === 'en' ? 'Client added successfully!' : 'Client ajouté avec succès!'), 'success');
+                        currentEditingIndex = -1;
+                    })
+                    .catch(err => {
+                        console.error('❌ [CLIENT] Error saving client:', err);
+                        showNotification('Échec de sauvegarde du client', 'error');
+                        // Still render the client even if save failed
+                        renderAdminClients();
+                    });
             };
 
             // Check if user uploaded a new logo
             if (logoInput.files && logoInput.files[0]) {
                 const file = logoInput.files[0];
                 if (file.type.startsWith('image/')) {
-                    const reader = new FileReader();
-                    reader.onload = function (e) {
-                        processClientData(e.target.result);
-                    };
-                    reader.readAsDataURL(file);
+                    // FIX: Upload to R2 for persistence (like hero backgrounds)
+                    showNotification('Téléversement du logo en cours...', 'info');
+
+                    // Upload using firebaseHelper
+                    const timestamp = Date.now();
+                    const fileName = `client_${timestamp}_${file.name.replace(/\s+/g, '_')}`;
+                    const path = `images/clients/${fileName}`;
+
+                    window.firebaseHelper.uploadFile(path, file, (progress) => {
+                        console.log(`Upload progress: ${progress}%`);
+                    }).then(result => {
+                        if (result.success) {
+                            const r2Url = result.url;
+                            processClientData(r2Url);
+                        } else {
+                            showNotification('Erreur lors du téléversement: ' + result.error, 'error');
+                        }
+                    }).catch(err => {
+                        console.error('Upload error:', err);
+                        showNotification('Erreur critique lors du téléversement', 'error');
+                    });
                 } else {
                     showNotification('Veuillez sélectionner une image valide', 'error');
                 }
@@ -7347,26 +8799,48 @@ function setupAdminForms() {
                 author: currentUser.username
             };
 
+            // FIX: Ensure customPages array exists
+            if (!siteData.customPages || !Array.isArray(siteData.customPages)) {
+                siteData.customPages = [];
+            }
+
             if (currentEditingIndex >= 0) {
                 siteData.customPages[currentEditingIndex] = { ...siteData.customPages[currentEditingIndex], ...pageData };
                 logActivity(currentUser.username, `Page modifiée: ${title}`);
             } else {
-                if (!siteData.customPages) siteData.customPages = [];
                 siteData.customPages.push(pageData);
                 logActivity(currentUser.username, `Page créée: ${title}`);
+                console.log('✅ [PAGE] Page ajoutée à siteData.customPages:', pageData);
             }
 
-            if (forceSaveData()) {
-                renderAdminPages();
-                closeModal('pageModal');
-                showNotification(currentEditingIndex >= 0 ?
-                    (siteData.language === 'en' ? 'Page updated successfully!' : 'Page modifiée avec succès!') :
-                    (siteData.language === 'en' ? 'Page created successfully!' : 'Page créée avec succès!'), 'success');
-
-                currentEditingIndex = -1;
-            } else {
-                showNotification('Échec de sauvegarde de la page', 'error');
-            }
+            // FIX: Save to Firestore immediately (like clients and jobs)
+            saveAdminDataToFirestore('customPages', pageData.id.toString(), pageData, `Page ${currentEditingIndex >= 0 ? 'updated' : 'added'}: ${title}`)
+                .then(() => {
+                    console.log('✅ [PAGE] Page sauvegardée dans Firestore');
+                    return forceSaveData();
+                })
+                .then(() => {
+                    // FIX: Create page section in HTML if it doesn't exist
+                    createCustomPageSection(pageData);
+                    
+                    // FIX: Update navigation with custom pages
+                    updateCustomPagesNavigation();
+                    
+                    renderAdminPages();
+                    closeModal('pageModal');
+                    showNotification(currentEditingIndex >= 0 ?
+                        (siteData.language === 'en' ? 'Page updated successfully!' : 'Page modifiée avec succès!') :
+                        (siteData.language === 'en' ? 'Page created successfully!' : 'Page créée avec succès!'), 'success');
+                    currentEditingIndex = -1;
+                })
+                .catch(err => {
+                    console.error('❌ [PAGE] Error saving page:', err);
+                    showNotification('Échec de sauvegarde de la page', 'error');
+                    // Still render the page even if save failed
+                    createCustomPageSection(pageData);
+                    updateCustomPagesNavigation();
+                    renderAdminPages();
+                });
         };
     }
 
@@ -7643,37 +9117,68 @@ function setupAdminFileUploads() {
                 const heroBackground = document.getElementById('heroBackground');
 
                 if (file.type.startsWith('video/')) {
-                    // FIX: Use createObjectURL instead of DataURL for videos
-                    const videoURL = URL.createObjectURL(file);
+                    // FIX: Upload to R2 for persistence
+                    showNotification('Téléversement de la vidéo en cours...', 'info');
 
-                    siteData.heroBackground = {
-                        type: 'video',
-                        url: videoURL,
-                        name: file.name,
-                        isObjectURL: true // Flag to know it's an object URL
-                    };
+                    // Upload using firebaseHelper
+                    const timestamp = Date.now();
+                    const fileName = `hero_${timestamp}_${file.name.replace(/\s+/g, '_')}`;
+                    const path = `videos/${fileName}`;
 
-                    const heroVideo = document.getElementById('heroVideo');
-                    const heroVideoSource = document.getElementById('heroVideoSource');
-                    if (heroVideo && heroVideoSource) {
-                        // Revoke previous object URL if exists
-                        if (heroVideoSource.src && heroVideoSource.src.startsWith('blob:')) {
-                            URL.revokeObjectURL(heroVideoSource.src);
+                    window.firebaseHelper.uploadFile(path, file, (progress) => {
+                        console.log(`Upload progress: ${progress}%`);
+                    }).then(result => {
+                        if (result.success) {
+                            const r2Url = result.url;
+
+                            siteData.heroBackground = {
+                                type: 'video',
+                                url: r2Url,
+                                name: file.name,
+                                isObjectURL: false
+                            };
+
+                            const heroVideo = document.getElementById('heroVideo');
+                            const heroVideoSource = document.getElementById('heroVideoSource');
+                            if (heroVideo && heroVideoSource) {
+                                heroVideoSource.src = r2Url;
+                                heroVideo.load();
+                                heroVideo.style.display = 'block';
+                                heroBackground.classList.add('has-video');
+                                heroBackground.classList.remove('has-image');
+                            }
+
+                            // Save immediately to Firestore - save heroBackground to heroSettings
+                            const heroSettings = {
+                                titleGradient: siteData.titleGradient,
+                                sloganGradient: siteData.sloganGradient,
+                                descriptionGradient: siteData.descriptionGradient,
+                                heroBackground: siteData.heroBackground,
+                                heroSizes: siteData.heroSizes,
+                                titleFormatting: siteData.titleFormatting,
+                                subtitleFormatting: siteData.subtitleFormatting
+                            };
+                            saveAdminDataToFirestore('heroSettings', 'main', heroSettings, 'Hero Video Update')
+                                .then(() => forceSaveData())
+                                .then(() => {
+                                    showNotification('Vidéo hero sauvegardée avec succès', 'success');
+                                    logActivity(currentUser.username, 'Vidéo hero mise à jour (R2)');
+                                });
+                        } else {
+                            showNotification('Erreur lors du téléversement: ' + result.error, 'error');
                         }
-                        heroVideoSource.src = videoURL;
-                        heroVideo.load();
-                        heroVideo.style.display = 'block';
-                        heroBackground.classList.add('has-video');
-                        heroBackground.classList.remove('has-image');
-                    }
+                    }).catch(err => {
+                        console.error('Upload error:', err);
+                        showNotification('Erreur critique lors du téléversement', 'error');
+                    });
 
-                    // FIX: Single notification
-                    showNotification(siteData.language === 'en' ? 'Hero video updated' : 'Vidéo hero mise à jour', 'success');
-                    logActivity(currentUser.username, 'Vidéo hero modifiée');
                 } else if (file.type.startsWith('image/')) {
+                    // FIX: Upload to R2 for persistence (like videos)
+                    showNotification('Téléversement de l\'image en cours...', 'info');
+
+                    // Optimize image before upload
                     const reader = new FileReader();
                     reader.onload = function (e) {
-                        // Redimensionner l'image pour optimiser les performances
                         const img = new Image();
                         img.onload = function () {
                             const canvas = document.createElement('canvas');
@@ -7692,26 +9197,62 @@ function setupAdminFileUploads() {
                             canvas.height = height;
                             ctx.drawImage(img, 0, 0, width, height);
 
-                            const optimizedDataUrl = canvas.toDataURL('image/jpeg', 0.8);
+                            // Convert canvas to blob for R2 upload
+                            canvas.toBlob(function (blob) {
+                                if (!blob) {
+                                    showNotification('Erreur lors de l\'optimisation de l\'image', 'error');
+                                    return;
+                                }
 
-                            siteData.heroBackground = {
-                                type: 'image',
-                                url: optimizedDataUrl,
-                                name: file.name
-                            };
+                                // Upload using firebaseHelper
+                                const timestamp = Date.now();
+                                const fileName = `hero_${timestamp}_${file.name.replace(/\s+/g, '_')}`;
+                                const path = `images/${fileName}`;
 
-                            heroBackground.style.backgroundImage = `url(${optimizedDataUrl})`;
-                            heroBackground.classList.add('has-image');
-                            heroBackground.classList.remove('has-video');
+                                window.firebaseHelper.uploadFile(path, blob, (progress) => {
+                                    console.log(`Upload progress: ${progress}%`);
+                                }).then(result => {
+                                    if (result.success) {
+                                        const r2Url = result.url;
 
-                            const heroVideo = document.getElementById('heroVideo');
-                            if (heroVideo) heroVideo.style.display = 'none';
+                                        siteData.heroBackground = {
+                                            type: 'image',
+                                            url: r2Url,
+                                            name: file.name,
+                                            isObjectURL: false
+                                        };
 
-                            // FIX: Single notification
-                            if (saveSiteData()) {
-                                showNotification(siteData.language === 'en' ? 'Hero background updated and optimized' : 'Fond hero mis à jour et optimisé', 'success');
-                                logActivity(currentUser.username, 'Fond hero modifié');
-                            }
+                                        heroBackground.style.backgroundImage = `url(${r2Url})`;
+                                        heroBackground.classList.add('has-image');
+                                        heroBackground.classList.remove('has-video');
+
+                                        const heroVideo = document.getElementById('heroVideo');
+                                        if (heroVideo) heroVideo.style.display = 'none';
+
+                                        // Save immediately to Firestore - save heroBackground to heroSettings
+                                        const heroSettings = {
+                                            titleGradient: siteData.titleGradient,
+                                            sloganGradient: siteData.sloganGradient,
+                                            descriptionGradient: siteData.descriptionGradient,
+                                            heroBackground: siteData.heroBackground,
+                                            heroSizes: siteData.heroSizes,
+                                            titleFormatting: siteData.titleFormatting,
+                                            subtitleFormatting: siteData.subtitleFormatting
+                                        };
+                                        saveAdminDataToFirestore('heroSettings', 'main', heroSettings, 'Hero background image updated')
+                                            .then(() => forceSaveData())
+                                            .then(() => {
+                                                showNotification(siteData.language === 'en' ? 'Hero background image saved successfully' : 'Image hero sauvegardée avec succès', 'success');
+                                                logActivity(currentUser.username, 'Image hero mise à jour (R2)');
+                                            });
+                                    } else {
+                                        showNotification('Erreur lors du téléversement: ' + result.error, 'error');
+                                    }
+                                }).catch(err => {
+                                    console.error('Upload error:', err);
+                                    showNotification('Erreur critique lors du téléversement', 'error');
+                                });
+                            }, 'image/jpeg', 0.8);
                         };
                         img.src = e.target.result;
                     };
@@ -7721,34 +9262,70 @@ function setupAdminFileUploads() {
         });
     }
 
-    // Footer background upload avec redimensionnement
+    // Footer background upload avec redimensionnement - FIX: Upload to R2 and save to Firestore
     const footerBackgroundInput = document.getElementById('footerBackgroundInput');
     if (footerBackgroundInput) {
         footerBackgroundInput.addEventListener('change', function (e) {
             const file = e.target.files[0];
             if (file) {
-                const reader = new FileReader();
-                reader.onload = function (e) {
-                    const footerBackground = document.getElementById('footerBackground');
+                const footerBackground = document.getElementById('footerBackground');
 
-                    if (file.type.startsWith('video/')) {
-                        siteData.footerBackground = {
-                            type: 'video',
-                            url: e.target.result,
-                            name: file.name
-                        };
+                if (file.type.startsWith('video/')) {
+                    // FIX: Upload to R2 for persistence
+                    showNotification('Téléversement de la vidéo footer en cours...', 'info');
 
-                        const footerVideo = document.getElementById('footerVideo');
-                        const footerVideoSource = document.getElementById('footerVideoSource');
-                        if (footerVideo && footerVideoSource) {
-                            footerVideoSource.src = e.target.result;
-                            footerVideo.load();
-                            footerVideo.style.display = 'block';
-                            footerBackground.classList.add('has-video');
-                            footerBackground.classList.remove('has-image');
+                    const timestamp = Date.now();
+                    const fileName = `footer_${timestamp}_${file.name.replace(/\s+/g, '_')}`;
+                    const path = `videos/${fileName}`;
+
+                    window.firebaseHelper.uploadFile(path, file, (progress) => {
+                        console.log(`Upload progress: ${progress}%`);
+                    }).then(async result => {
+                        if (result.success) {
+                            const r2Url = result.url;
+
+                            siteData.footerBackground = {
+                                type: 'video',
+                                url: r2Url,
+                                name: file.name,
+                                isObjectURL: false
+                            };
+
+                            const footerVideo = document.getElementById('footerVideo');
+                            const footerVideoSource = document.getElementById('footerVideoSource');
+                            if (footerVideo && footerVideoSource) {
+                                footerVideoSource.src = r2Url;
+                                footerVideo.load();
+                                footerVideo.style.display = 'block';
+                                footerBackground.classList.add('has-video');
+                                footerBackground.classList.remove('has-image');
+                            }
+
+                            // Save to Firestore
+                            await saveAdminDataToFirestore('settings', 'main', siteData.settings, 'Footer background video updated')
+                                .then(() => {
+                                    // Also save footerBackground separately
+                                    const footerData = { footerBackground: siteData.footerBackground };
+                                    return saveAdminDataToFirestore('footerSettings', 'main', footerData, 'Footer background video');
+                                })
+                                .then(() => forceSaveData())
+                                .then(() => {
+                                    showNotification('Vidéo footer sauvegardée avec succès', 'success');
+                                    logActivity(currentUser.username, 'Vidéo footer mise à jour (R2)');
+                                });
+                        } else {
+                            showNotification('Erreur lors du téléversement: ' + result.error, 'error');
                         }
-                    } else if (file.type.startsWith('image/')) {
-                        // Redimensionner l'image
+                    }).catch(err => {
+                        console.error('Upload error:', err);
+                        showNotification('Erreur critique lors du téléversement', 'error');
+                    });
+                } else if (file.type.startsWith('image/')) {
+                    // FIX: Upload to R2 for persistence (like hero backgrounds)
+                    showNotification('Téléversement de l\'image footer en cours...', 'info');
+
+                    const reader = new FileReader();
+                    reader.onload = function (e) {
                         const img = new Image();
                         img.onload = function () {
                             const canvas = document.createElement('canvas');
@@ -7766,30 +9343,63 @@ function setupAdminFileUploads() {
                             canvas.height = height;
                             ctx.drawImage(img, 0, 0, width, height);
 
-                            const optimizedDataUrl = canvas.toDataURL('image/jpeg', 0.8);
+                            // Convert canvas to blob for R2 upload
+                            canvas.toBlob(function (blob) {
+                                if (!blob) {
+                                    showNotification('Erreur lors de l\'optimisation de l\'image', 'error');
+                                    return;
+                                }
 
-                            siteData.footerBackground = {
-                                type: 'image',
-                                url: optimizedDataUrl,
-                                name: file.name
-                            };
+                                // Upload using firebaseHelper
+                                const timestamp = Date.now();
+                                const fileName = `footer_${timestamp}_${file.name.replace(/\s+/g, '_')}`;
+                                const path = `images/${fileName}`;
 
-                            footerBackground.style.backgroundImage = `url(${optimizedDataUrl})`;
-                            footerBackground.classList.add('has-image');
-                            footerBackground.classList.remove('has-video');
+                                window.firebaseHelper.uploadFile(path, blob, (progress) => {
+                                    console.log(`Upload progress: ${progress}%`);
+                                }).then(async result => {
+                                    if (result.success) {
+                                        const r2Url = result.url;
 
-                            const footerVideo = document.getElementById('footerVideo');
-                            if (footerVideo) footerVideo.style.display = 'none';
+                                        siteData.footerBackground = {
+                                            type: 'image',
+                                            url: r2Url,
+                                            name: file.name,
+                                            isObjectURL: false
+                                        };
 
-                            if (saveSiteData()) {
-                                showNotification(siteData.language === 'en' ? 'Footer background updated and optimized' : 'Fond footer mis à jour et optimisé', 'success');
-                                logActivity(currentUser.username, 'Fond footer modifié');
-                            }
+                                        footerBackground.style.backgroundImage = `url(${r2Url})`;
+                                        footerBackground.classList.add('has-image');
+                                        footerBackground.classList.remove('has-video');
+
+                                        const footerVideo = document.getElementById('footerVideo');
+                                        if (footerVideo) footerVideo.style.display = 'none';
+
+                                        // Save to Firestore
+                                        await saveAdminDataToFirestore('settings', 'main', siteData.settings, 'Footer background image updated')
+                                            .then(() => {
+                                                // Also save footerBackground separately
+                                                const footerData = { footerBackground: siteData.footerBackground };
+                                                return saveAdminDataToFirestore('footerSettings', 'main', footerData, 'Footer background image');
+                                            })
+                                            .then(() => forceSaveData())
+                                            .then(() => {
+                                                showNotification('Image footer sauvegardée avec succès', 'success');
+                                                logActivity(currentUser.username, 'Image footer mise à jour (R2)');
+                                            });
+                                    } else {
+                                        showNotification('Erreur lors du téléversement: ' + result.error, 'error');
+                                    }
+                                }).catch(err => {
+                                    console.error('Upload error:', err);
+                                    showNotification('Erreur critique lors du téléversement', 'error');
+                                });
+                            }, 'image/jpeg', 0.8);
                         };
                         img.src = e.target.result;
-                    }
-                };
-                reader.readAsDataURL(file);
+                    };
+                    reader.readAsDataURL(file);
+                }
             }
         });
     }
@@ -7846,19 +9456,43 @@ function setupAdminFileUploads() {
         adminIsoQrInput.addEventListener('change', function (e) {
             const file = e.target.files[0];
             if (file && file.type.startsWith('image/')) {
-                const reader = new FileReader();
-                reader.onload = function (e) {
-                    siteData.isoQr = e.target.result;
+                // FIX: Upload to R2 for persistence
+                showNotification('Téléversement du QR Code ISO en cours...', 'info');
 
-                    /* FIX: Update all ISO QR displays */
-                    updateIsoImages();
+                const timestamp = Date.now();
+                const fileName = `iso_qr_${timestamp}_${file.name.replace(/\s+/g, '_')}`;
+                const path = `images/${fileName}`;
 
-                    if (saveSiteData()) {
-                        showNotification(siteData.language === 'en' ? 'ISO QR Code updated' : 'QR Code ISO mis à jour', 'success');
-                        logActivity(currentUser.username, 'QR Code ISO modifié');
+                window.firebaseHelper.uploadFile(path, file, (progress) => {
+                    console.log(`Upload progress: ${progress}%`);
+                }).then(async result => {
+                    if (result.success) {
+                        const r2Url = result.url;
+                        siteData.isoQr = r2Url;
+
+                        /* FIX: Update all ISO QR displays */
+                        updateIsoImages();
+
+                        // Save to Firestore
+                        const isoData = {
+                            isoQr: siteData.isoQr,
+                            isoCert: siteData.isoCert,
+                            brochure: siteData.brochure,
+                            gallery: siteData.gallery
+                        };
+                        await saveAdminDataToFirestore('iso', 'main', isoData, 'ISO QR Code updated')
+                            .then(() => forceSaveData())
+                            .then(() => {
+                                showNotification(siteData.language === 'en' ? 'ISO QR Code updated' : 'QR Code ISO mis à jour', 'success');
+                                logActivity(currentUser.username, 'QR Code ISO modifié (R2)');
+                            });
+                    } else {
+                        showNotification('Erreur lors du téléversement: ' + result.error, 'error');
                     }
-                };
-                reader.readAsDataURL(file);
+                }).catch(err => {
+                    console.error('Upload error:', err);
+                    showNotification('Erreur critique lors du téléversement', 'error');
+                });
             } else {
                 showNotification('Veuillez sélectionner une image valide', 'error');
             }
@@ -7870,19 +9504,45 @@ function setupAdminFileUploads() {
         adminIsoCertInput.addEventListener('change', function (e) {
             const file = e.target.files[0];
             if (file && file.type.startsWith('image/')) {
-                const reader = new FileReader();
-                reader.onload = function (e) {
-                    siteData.isoCert = e.target.result;
+                // FIX: Upload to R2 for persistence
+                showNotification('Téléversement du Certificat ISO en cours...', 'info');
 
-                    /* FIX: Update all ISO certificate displays */
-                    updateIsoImages();
+                const timestamp = Date.now();
+                const fileName = `iso_cert_${timestamp}_${file.name.replace(/\s+/g, '_')}`;
+                const path = `images/${fileName}`;
 
-                    if (saveSiteData()) {
-                        showNotification(siteData.language === 'en' ? 'ISO Certificate updated' : 'Certificat ISO mis à jour', 'success');
-                        logActivity(currentUser.username, 'Certificat ISO modifié');
+                window.firebaseHelper.uploadFile(path, file, (progress) => {
+                    console.log(`Upload progress: ${progress}%`);
+                }).then(async result => {
+                    if (result.success) {
+                        const r2Url = result.url;
+                        siteData.isoCert = r2Url;
+
+                        /* FIX: Update all ISO certificate displays */
+                        updateIsoImages();
+
+                        // Save to Firestore
+                        const isoData = {
+                            isoQr: siteData.isoQr,
+                            isoCert: siteData.isoCert,
+                            brochure: siteData.brochure,
+                            gallery: siteData.gallery
+                        };
+                        await saveAdminDataToFirestore('iso', 'main', isoData, 'ISO Certificate updated')
+                            .then(() => forceSaveData())
+                            .then(() => {
+                                // FIX: Update ISO images immediately after save
+                                updateIsoImages();
+                                showNotification(siteData.language === 'en' ? 'ISO Certificate updated' : 'Certificat ISO mis à jour', 'success');
+                                logActivity(currentUser.username, 'Certificat ISO modifié (R2)');
+                            });
+                    } else {
+                        showNotification('Erreur lors du téléversement: ' + result.error, 'error');
                     }
-                };
-                reader.readAsDataURL(file);
+                }).catch(err => {
+                    console.error('Upload error:', err);
+                    showNotification('Erreur critique lors du téléversement', 'error');
+                });
             } else {
                 showNotification('Veuillez sélectionner une image valide', 'error');
             }
@@ -7894,26 +9554,53 @@ function setupAdminFileUploads() {
         adminBrochureInput.addEventListener('change', function (e) {
             const file = e.target.files[0];
             if (file) {
-                const reader = new FileReader();
-                reader.onload = function (e) {
-                    siteData.brochure = {
-                        name: file.name,
-                        type: file.type,
-                        url: e.target.result,
-                        uploadedAt: new Date().toISOString()
-                    };
+                // FIX: Upload to R2 for persistence (like hero backgrounds and client logos)
+                showNotification('Téléversement de la brochure en cours...', 'info');
 
-                    const brochureInfo = document.getElementById('adminBrochureInfo');
-                    if (brochureInfo) {
-                        brochureInfo.innerHTML = `<i class="fas fa-file-pdf"></i> ${file.name}`;
-                    }
+                // Upload using firebaseHelper
+                const timestamp = Date.now();
+                const fileName = `brochure_${timestamp}_${file.name.replace(/\s+/g, '_')}`;
+                const path = `brochures/${fileName}`;
 
-                    if (saveSiteData()) {
-                        showNotification('Brochure mise à jour', 'success');
-                        logActivity(currentUser.username, 'Brochure mise à jour');
+                window.firebaseHelper.uploadFile(path, file, (progress) => {
+                    console.log(`Upload progress: ${progress}%`);
+                }).then(async result => {
+                    if (result.success) {
+                        const r2Url = result.url;
+
+                        siteData.brochure = {
+                            name: file.name,
+                            type: file.type,
+                            url: r2Url,
+                            uploadedAt: new Date().toISOString(),
+                            isObjectURL: false
+                        };
+
+                        const brochureInfo = document.getElementById('adminBrochureInfo');
+                        if (brochureInfo) {
+                            brochureInfo.innerHTML = `<i class="fas fa-file-pdf"></i> ${file.name}`;
+                        }
+
+                        // Save to Firestore
+                        const isoData = {
+                            isoQr: siteData.isoQr,
+                            isoCert: siteData.isoCert,
+                            brochure: siteData.brochure,
+                            gallery: siteData.gallery
+                        };
+                        await saveAdminDataToFirestore('iso', 'main', isoData, 'Brochure updated')
+                            .then(() => forceSaveData())
+                            .then(() => {
+                                showNotification('Brochure mise à jour et sauvegardée', 'success');
+                                logActivity(currentUser.username, 'Brochure mise à jour (R2)');
+                            });
+                    } else {
+                        showNotification('Erreur lors du téléversement: ' + result.error, 'error');
                     }
-                };
-                reader.readAsDataURL(file);
+                }).catch(err => {
+                    console.error('Upload error:', err);
+                    showNotification('Erreur critique lors du téléversement', 'error');
+                });
             }
         });
     }
@@ -8056,23 +9743,49 @@ function editService(index) {
     openModal('serviceModal');
 }
 
-function toggleService(index) {
+async function toggleService(index) {
     siteData.services[index].active = !siteData.services[index].active;
-    if (saveSiteData()) {
-        renderAdminServices();
-        showNotification('Service mis à jour', 'success');
-        logActivity(currentUser.username, `Service ${siteData.services[index].active ? 'activé' : 'désactivé'}: ${siteData.services[index].title.fr}`);
-    }
+    const service = siteData.services[index];
+    
+    // Save to Firestore immediately
+    await saveAdminDataToFirestore('services', service.id.toString(), service, `Service ${service.active ? 'activated' : 'deactivated'}: ${service.title.fr}`)
+        .then(() => forceSaveData())
+        .then(() => {
+            renderAdminServices();
+            showNotification('Service mis à jour', 'success');
+            logActivity(currentUser.username, `Service ${service.active ? 'activé' : 'désactivé'}: ${service.title.fr}`);
+        })
+        .catch(err => {
+            console.error('Error updating service:', err);
+            showNotification('Erreur lors de la mise à jour', 'error');
+        });
 }
 
-function deleteService(index) {
+async function deleteService(index) {
     if (confirm('Supprimer ce service? Cette action est irréversible.')) {
         const service = siteData.services[index];
+        const serviceId = service.id.toString();
+        
+        // Delete from Firestore first
+        if (typeof window.firebaseHelper !== 'undefined' && APP_MODE === 'FIREBASE') {
+            try {
+                await window.firebaseHelper.deleteDocument('services', serviceId);
+                console.log(`✅ Service deleted from Firestore: ${serviceId}`);
+            } catch (err) {
+                console.error('Error deleting service from Firestore:', err);
+            }
+        }
+        
+        // Remove from local array
         siteData.services.splice(index, 1);
-        if (saveSiteData()) {
+        
+        // Save to Firestore (update main siteData)
+        if (forceSaveData()) {
             renderAdminServices();
             showNotification('Service supprimé', 'success');
             logActivity(currentUser.username, `Service supprimé: ${service.title.fr}`);
+        } else {
+            showNotification('Erreur lors de la suppression', 'error');
         }
     }
 }
@@ -8196,9 +9909,18 @@ function getDragAfterElement(container, y) {
     }, { offset: Number.NEGATIVE_INFINITY }).element;
 }
 
-function toggleServiceConfig(index) {
+async function toggleServiceConfig(index) {
     siteData.services[index].active = !siteData.services[index].active;
-    renderServicesConfiguration();
+    
+    // Save to Firestore
+    const service = siteData.services[index];
+    await saveAdminDataToFirestore('services', service.id || `service_${index}`, service, `Service ${service.active ? 'activated' : 'deactivated'}`);
+    
+    if (forceSaveData()) {
+        renderServicesConfiguration();
+        showNotification(`Service ${service.active ? 'activé' : 'désactivé'}`, 'success');
+        logActivity(currentUser.username, `Service ${service.active ? 'activé' : 'désactivé'}: ${service.title?.fr || service.title}`);
+    }
 }
 
 function moveServiceUp(index) {
@@ -8247,23 +9969,50 @@ function editClient(index) {
     openModal('clientModal');
 }
 
-function toggleClient(index) {
+async function toggleClient(index) {
     siteData.clients[index].active = !siteData.clients[index].active;
-    if (saveSiteData()) {
-        renderAdminClients();
-        showNotification('Client mis à jour', 'success');
-        logActivity(currentUser.username, `Client ${siteData.clients[index].active ? 'activé' : 'désactivé'}: ${siteData.clients[index].name}`);
-    }
+    const client = siteData.clients[index];
+    
+    // Save to Firestore immediately
+    await saveAdminDataToFirestore('clients', client.id.toString(), client, `Client ${client.active ? 'activated' : 'deactivated'}: ${client.name}`)
+        .then(() => forceSaveData())
+        .then(() => {
+            renderAdminClients();
+            showNotification('Client mis à jour', 'success');
+            logActivity(currentUser.username, `Client ${client.active ? 'activé' : 'désactivé'}: ${client.name}`);
+        })
+        .catch(err => {
+            console.error('Error updating client:', err);
+            showNotification('Erreur lors de la mise à jour', 'error');
+        });
 }
 
-function deleteClient(index) {
+async function deleteClient(index) {
     if (confirm('Supprimer ce client? Cette action est irréversible.')) {
         const client = siteData.clients[index];
+        const clientId = client.id.toString();
+        
+        // Delete from Firestore first
+        if (typeof window.firebaseHelper !== 'undefined' && APP_MODE === 'FIREBASE') {
+            try {
+                await window.firebaseHelper.deleteDocument('clients', clientId);
+                console.log(`✅ Client deleted from Firestore: ${clientId}`);
+            } catch (err) {
+                console.error('Error deleting client from Firestore:', err);
+                // Continue with local deletion even if Firestore delete fails
+            }
+        }
+        
+        // Remove from local array
         siteData.clients.splice(index, 1);
-        if (saveSiteData()) {
+        
+        // Save to Firestore (update main siteData)
+        if (forceSaveData()) {
             renderAdminClients();
             showNotification('Client supprimé', 'success');
             logActivity(currentUser.username, `Client supprimé: ${client.name}`);
+        } else {
+            showNotification('Erreur lors de la suppression', 'error');
         }
     }
 }
@@ -8281,18 +10030,27 @@ function editTestimonial(index) {
     openModal('testimonialModal');
 }
 
-function toggleTestimonial(index) {
+async function toggleTestimonial(index) {
     siteData.testimonials[index].active = !siteData.testimonials[index].active;
-    if (saveSiteData()) {
-        renderAdminTestimonials();
-        showNotification('Témoignage mis à jour', 'success');
-        logActivity(currentUser.username, `Témoignage ${siteData.testimonials[index].active ? 'activé' : 'désactivé'}: ${siteData.testimonials[index].name}`);
+    const testimonial = siteData.testimonials[index];
+    
+    // Save to Firestore immediately
+    await saveAdminDataToFirestore('testimonials', testimonial.id.toString(), testimonial, `Testimonial ${testimonial.active ? 'activated' : 'deactivated'}: ${testimonial.name}`)
+        .then(() => forceSaveData())
+        .then(() => {
+            renderAdminTestimonials();
+            showNotification('Témoignage mis à jour', 'success');
+            logActivity(currentUser.username, `Témoignage ${testimonial.active ? 'activé' : 'désactivé'}: ${testimonial.name}`);
 
-        // Redémarrer le carrousel automatique
-        if (currentPage === 'home') {
-            executeHomeScript();
-        }
-    }
+            // Redémarrer le carrousel automatique
+            if (currentPage === 'home') {
+                executeHomeScript();
+            }
+        })
+        .catch(err => {
+            console.error('Error updating testimonial:', err);
+            showNotification('Erreur lors de la mise à jour', 'error');
+        });
 }
 
 async function deleteTestimonial(index) {
@@ -8342,23 +10100,49 @@ function editJob(index) {
     openModal('jobModal');
 }
 
-function toggleJob(index) {
+async function toggleJob(index) {
     siteData.jobs[index].active = !siteData.jobs[index].active;
-    if (saveSiteData()) {
-        renderAdminJobs();
-        showNotification('Offre mise à jour', 'success');
-        logActivity(currentUser.username, `Offre ${siteData.jobs[index].active ? 'activée' : 'désactivée'}: ${siteData.jobs[index].title.fr}`);
-    }
+    const job = siteData.jobs[index];
+    
+    // Save to Firestore immediately
+    await saveAdminDataToFirestore('jobs', job.id.toString(), job, `Job ${job.active ? 'activated' : 'deactivated'}: ${job.title.fr}`)
+        .then(() => forceSaveData())
+        .then(() => {
+            renderAdminJobs();
+            showNotification('Offre mise à jour', 'success');
+            logActivity(currentUser.username, `Offre ${job.active ? 'activée' : 'désactivée'}: ${job.title.fr}`);
+        })
+        .catch(err => {
+            console.error('Error updating job:', err);
+            showNotification('Erreur lors de la mise à jour', 'error');
+        });
 }
 
-function deleteJob(index) {
+async function deleteJob(index) {
     if (confirm('Supprimer cette offre? Cette action est irréversible.')) {
         const job = siteData.jobs[index];
+        const jobId = job.id.toString();
+        
+        // Delete from Firestore first
+        if (typeof window.firebaseHelper !== 'undefined' && APP_MODE === 'FIREBASE') {
+            try {
+                await window.firebaseHelper.deleteDocument('jobs', jobId);
+                console.log(`✅ Job deleted from Firestore: ${jobId}`);
+            } catch (err) {
+                console.error('Error deleting job from Firestore:', err);
+            }
+        }
+        
+        // Remove from local array
         siteData.jobs.splice(index, 1);
-        if (saveSiteData()) {
+        
+        // Save to Firestore (update main siteData)
+        if (forceSaveData()) {
             renderAdminJobs();
             showNotification('Offre supprimée', 'success');
             logActivity(currentUser.username, `Offre supprimée: ${job.title.fr}`);
+        } else {
+            showNotification('Erreur lors de la suppression', 'error');
         }
     }
 }
@@ -8511,15 +10295,72 @@ function printCV(cvId) {
 }
 
 function previewCV(cvId) {
+    console.log('🔍 [previewCV] Requested CV ID:', cvId);
+
+    // Debug current database
+    if (siteData.cvDatabase && siteData.cvDatabase.length > 0) {
+        console.log('🔍 [previewCV] Database sample (first 2):', siteData.cvDatabase.slice(0, 2).map(c => ({ id: c.id, name: c.applicantName, r2: c.cvR2Url, url: c.cvUrl })));
+    } else {
+        console.warn('⚠️ [previewCV] Database is empty!');
+    }
+
     const cv = siteData.cvDatabase.find(c => c.id == cvId);
     if (!cv) {
+        console.error('❌ [previewCV] CV not found for ID:', cvId);
         showNotification('CV non trouvé', 'error');
         return;
     }
 
+    console.log('✅ [previewCV] Found CV:', cv.applicantName, cv.id);
+
     // Priorité: URL R2 > cvUrl > applicantCV content (R2 is now public)
     const cvUrl = cv.cvR2Url || cv.cvUrl || null;
-    const cvContent = cvUrl || cv.applicantCV?.content;
+    console.log('🔗 [previewCV] Using URL:', cvUrl);
+
+    // Force-Fix: Ensure we are using the CORRECT public R2 domain provided by USER
+    // User verified: https://pub-f4fd5f0dedd24600b104dee9aec15539.r2.dev
+    const PUBLIC_R2_DOMAIN = 'https://pub-f4fd5f0dedd24600b104dee9aec15539.r2.dev';
+
+    // Helper to fix URL
+    const fixR2Url = (url) => {
+        if (!url || typeof url !== 'string') return url;
+
+        // If it's not an R2 URL, return as is (unless we want to force all CVs to R2?)
+        if (!url.includes('r2.dev') && !url.includes('workers.dev')) return url;
+
+        try {
+            const urlObj = new URL(url);
+
+            // 1. Force correct Domain
+            let newUrl = PUBLIC_R2_DOMAIN;
+
+            // 2. Clean Path: Remove bucket name if present (R2 public bucket URLs don't need bucket name in path)
+            let cleanPath = urlObj.pathname;
+            if (cleanPath.startsWith('/ae2i-cvs-algerie')) {
+                cleanPath = cleanPath.replace('/ae2i-cvs-algerie', '');
+            }
+
+            // Ensure path starts with /
+            if (!cleanPath.startsWith('/')) cleanPath = '/' + cleanPath;
+
+            newUrl += cleanPath;
+
+            if (newUrl !== url) {
+                console.warn(`⚠️ [previewCV] Fixed URL: ${url} -> ${newUrl}`);
+            }
+            return newUrl;
+        } catch (e) { console.error('Error parsing URL:', e); }
+        return url;
+    };
+
+
+
+    let finalCvUrl = fixR2Url(cvUrl);
+
+    // Also fix applicantCV.content if it's an R2 URL
+    let cvContent = finalCvUrl || fixR2Url(cv.applicantCV?.content);
+
+    console.log('✅ [previewCV] Final Content URL:', cvContent);
     const cvFileName = cv.cvFileName || cv.applicantCV?.name || 'CV.pdf';
     const cvFileSize = cv.cvFileSize || cv.applicantCV?.size || 0;
 
@@ -8534,7 +10375,7 @@ function previewCV(cvId) {
                 </h4>
                 <div style="background: var(--bg-alt); padding: 16px; border-radius: var(--border-radius-lg); margin-top: 12px; border: 2px solid var(--border);">
                     <div style="display: flex; gap: 12px; margin-bottom: 12px; flex-wrap: wrap;">
-                        <button class="btn btn-sm btn-primary functional-btn" onclick="openCVViewer('${cvContent}', '${cv.applicantName}')">
+                        <button class="btn btn-sm btn-primary functional-btn" onclick="openCVViewer('${cvContent}', '${cv.applicantName.replace(/'/g, "\\'")}')">
                             <i class="fas fa-expand"></i> Ouvrir en plein écran
                         </button>
                         <button class="btn btn-sm btn-success functional-btn" onclick="downloadCV(${cv.id})">
@@ -8543,8 +10384,11 @@ function previewCV(cvId) {
                         <button class="btn btn-sm btn-accent functional-btn" onclick="printCV(${cv.id})">
                             <i class="fas fa-print"></i> Imprimer
                         </button>
+                         <a href="${cvContent}" target="_blank" class="btn btn-sm btn-outline functional-btn">
+                            <i class="fas fa-external-link-alt"></i> Lien Direct
+                        </a>
                     </div>
-                    <iframe src="${cvContent}" style="width: 100%; height: 600px; border: 1px solid var(--border); border-radius: var(--border-radius);"></iframe>
+                    <iframe src="${cvContent}" style="width: 100%; height: 600px; border: 1px solid var(--border); border-radius: var(--border-radius);" onerror="console.error('Iframe error loading:', '${cvContent}')"></iframe>
                 </div>
             </div>
         `;
@@ -8589,25 +10433,95 @@ function contactApplicant(email) {
     logActivity(currentUser.username, `Contact candidat: ${email}`);
 }
 
-function markAsProcessed(cvId) {
-    // Try to find by id (number or string match)
-    let cv = siteData.cvDatabase.find(c => c.id === cvId || c.id == cvId || String(c.id) === String(cvId));
+async function markAsProcessed(cvId) {
+    console.log('✅ [MARK PROCESSED] Starting, received ID:', cvId, 'Type:', typeof cvId);
+    
+    // Try to find by id (number or string match) or firebaseId
+    let cv = siteData.cvDatabase.find(c => 
+        c.id === cvId || 
+        c.id == cvId || 
+        String(c.id) === String(cvId) ||
+        c.firebaseId === cvId ||
+        String(c.firebaseId) === String(cvId)
+    );
 
     // If not found, try to find by applicantEmail as fallback
     if (!cv && typeof cvId === 'string') {
         cv = siteData.cvDatabase.find(c => c.applicantEmail === cvId);
     }
 
-    if (cv) {
-        cv.processed = true;
-        cv.processedAt = new Date().toISOString();
-        cv.processedBy = currentUser.username;
-        if (saveSiteData()) {
-            renderAdminCvDatabase();
-            populateCVJobFilter();
-            showNotification('Candidature marquée comme traitée', 'success');
-            logActivity(currentUser.username, `Candidature traitée: ${cv.applicantName}`);
+    if (!cv) {
+        showNotification('Candidature non trouvée', 'error');
+        console.error('❌ [MARK PROCESSED] CV not found, ID:', cvId);
+        return;
+    }
+
+    console.log('✅ [MARK PROCESSED] Found CV:', {
+        id: cv.id,
+        firebaseId: cv.firebaseId,
+        name: cv.applicantName
+    });
+
+    const cvName = cv.applicantName || 'Candidat';
+    
+    // Update local data
+    cv.processed = true;
+    cv.processedAt = new Date().toISOString();
+    cv.processedBy = currentUser.username;
+
+    // Update Firebase if in Firebase mode
+    if (APP_MODE === 'FIREBASE' && window.firebaseHelper && cv.firebaseId) {
+        try {
+            const firebaseIdString = String(cv.firebaseId);
+            console.log('🔥 [MARK PROCESSED] Updating Firebase document:', firebaseIdString);
+            
+            const updateData = {
+                processed: true,
+                processedAt: new Date().toISOString(),
+                processedBy: currentUser.username
+            };
+            
+            const result = await window.firebaseHelper.updateDocument('cvDatabase', firebaseIdString, updateData);
+            
+            if (result.success) {
+                console.log('✅ [MARK PROCESSED] Updated Firebase successfully');
+                // The listener will automatically update siteData.cvDatabase and trigger re-render
+                showNotification('Candidature marquée comme traitée', 'success');
+                logActivity(currentUser.username, `Candidature traitée: ${cvName}`);
+                // Force re-render to update UI
+                if (typeof renderAdminCvDatabase === 'function') renderAdminCvDatabase();
+                if (typeof renderRecruteurApplications === 'function') renderRecruteurApplications();
+                if (typeof renderLecteurCvDatabase === 'function') renderLecteurCvDatabase();
+                if (typeof populateCVJobFilter === 'function') populateCVJobFilter();
+                return;
+            } else {
+                console.error('❌ [MARK PROCESSED] Firebase update failed:', result.error);
+                showNotification(`Erreur lors de la mise à jour: ${result.error}`, 'error');
+                // Revert local change
+                cv.processed = false;
+                delete cv.processedAt;
+                delete cv.processedBy;
+                return;
+            }
+        } catch (error) {
+            console.error('❌ [MARK PROCESSED] Firebase update error:', error);
+            showNotification(`Erreur lors de la mise à jour: ${error.message}`, 'error');
+            // Revert local change
+            cv.processed = false;
+            delete cv.processedAt;
+            delete cv.processedBy;
+            return;
         }
+    }
+
+    // Only save locally if NOT in Firebase mode (localStorage mode)
+    if (saveSiteData()) {
+        renderAdminCvDatabase();
+        if (typeof renderRecruteurApplications === 'function') renderRecruteurApplications();
+        if (typeof renderLecteurCvDatabase === 'function') renderLecteurCvDatabase();
+        if (typeof populateCVJobFilter === 'function') populateCVJobFilter();
+        showNotification('Candidature marquée comme traitée', 'success');
+        logActivity(currentUser.username, `Candidature traitée: ${cvName}`);
     }
 }
 
@@ -8659,8 +10573,18 @@ async function deleteApplication(cvId) {
         return;
     }
 
-    // Try to find by id (number or string match)
-    let cv = siteData.cvDatabase.find(c => c.id === cvId || c.id == cvId || String(c.id) === String(cvId));
+    console.log('🗑️ [DELETE] Starting deletion, received ID:', cvId, 'Type:', typeof cvId);
+    console.log('🗑️ [DELETE] Current cvDatabase count:', siteData.cvDatabase?.length || 0);
+    console.log('🗑️ [DELETE] Sample IDs in database:', siteData.cvDatabase?.slice(0, 3).map(c => ({ id: c.id, firebaseId: c.firebaseId })) || []);
+
+    // Try to find by id (number or string match) or firebaseId
+    let cv = siteData.cvDatabase.find(c => 
+        c.id === cvId || 
+        c.id == cvId || 
+        String(c.id) === String(cvId) ||
+        c.firebaseId === cvId ||
+        String(c.firebaseId) === String(cvId)
+    );
 
     // If not found, try to find by applicantEmail as fallback
     if (!cv && typeof cvId === 'string') {
@@ -8669,32 +10593,174 @@ async function deleteApplication(cvId) {
 
     if (!cv) {
         showNotification('Candidature non trouvée', 'error');
+        console.error('❌ [DELETE] CV not found, ID:', cvId);
+        console.error('❌ [DELETE] Available IDs:', siteData.cvDatabase?.map(c => ({ id: c.id, firebaseId: c.firebaseId, email: c.applicantEmail })) || []);
         return;
     }
 
+    console.log('✅ [DELETE] Found CV:', {
+        id: cv.id,
+        firebaseId: cv.firebaseId,
+        name: cv.applicantName,
+        email: cv.applicantEmail
+    });
+
     const cvName = cv.applicantName || 'Candidat';
+    
+    // After the listener normalization fix, both cv.id and cv.firebaseId should ALWAYS be the Firebase document ID
+    // The listener in firebase.js now ensures: { ...docData, id: doc.id }
+    // And the normalizer ensures: d.firebaseId = firebaseDocId and d.id = firebaseDocId
+    // So we can safely use either cv.id or cv.firebaseId - they should be the same
+    
+    // Use firebaseId if available, otherwise use id
+    // Both should be the Firebase document ID after listener normalization
     const firebaseId = cv.firebaseId || cv.id;
+    
+    if (!firebaseId) {
+        console.error('❌ [DELETE] No Firebase ID found!');
+        console.error('❌ [DELETE] CV data:', {
+            id: cv.id,
+            firebaseId: cv.firebaseId,
+            email: cv.applicantEmail,
+            name: cv.applicantName
+        });
+        showNotification('Erreur: ID de candidature introuvable', 'error');
+        return;
+    }
+    
+    // Convert to string - Firebase requires string IDs
+    const firebaseIdString = String(firebaseId);
+    console.log('🗑️ [DELETE] Using Firebase ID:', firebaseIdString);
+    
+    // Log warning if ID looks like a timestamp (shouldn't happen after listener fix)
+    if (/^\d{10,}$/.test(firebaseIdString)) {
+        console.warn('⚠️ [DELETE] WARNING: Firebase ID looks like a timestamp:', firebaseIdString);
+        console.warn('⚠️ [DELETE] This should not happen after listener normalization fix');
+        console.warn('⚠️ [DELETE] The document may not exist in Firebase with this ID');
+        console.warn('💡 [DELETE] Try reloading the page to sync with Firebase');
+    }
 
     // Delete from Firebase if in Firebase mode
-    if (APP_MODE === 'FIREBASE' && window.firebaseHelper && firebaseId) {
+    if (APP_MODE === 'FIREBASE' && window.firebaseHelper && firebaseIdString) {
         try {
-            console.log('🗑️ [DELETE] Deleting from Firebase, ID:', firebaseId);
-            const result = await window.firebaseHelper.deleteDocument('cvDatabase', firebaseId);
+            console.log('🗑️ [DELETE] Attempting Firebase delete, collection: cvDatabase, documentId:', firebaseIdString);
+            console.log('🗑️ [DELETE] Current user:', currentUser?.username, 'Role:', currentUser?.role);
+            
+            // Check Firebase Auth authentication
+            const authUser = window.firebaseServices?.auth?.currentUser;
+            if (!authUser) {
+                console.error('❌ [DELETE] Not authenticated with Firebase Auth!');
+                console.error('❌ [DELETE] You must log in through Firebase Auth to delete candidatures.');
+                showNotification('Erreur: Vous devez être connecté avec Firebase Auth pour supprimer. Utilisez le bouton de connexion.', 'error');
+                return;
+            }
+            
+            console.log('✅ [DELETE] Firebase Auth user:', authUser.email, 'UID:', authUser.uid);
+            
+            // Check if user has the right role in Firestore
+            // We'll try to delete directly - if permissions fail, we'll get a clear error
+            
+            // Perform deletion directly (skip verification to avoid permission issues)
+            console.log('🗑️ [DELETE] Attempting to delete document:', firebaseIdString);
+            const result = await window.firebaseHelper.deleteDocument('cvDatabase', firebaseIdString);
+            console.log('🗑️ [DELETE] Firebase delete result:', result);
+            
             if (result.success) {
-                console.log('✅ [DELETE] Deleted from Firebase');
+                console.log('✅ [DELETE] Deleted from Firebase successfully');
+                
+                // Remove from local array immediately for better UX
+                const cvIndex = siteData.cvDatabase.findIndex(c =>
+                    c.id === cv.id || 
+                    c.firebaseId === cv.firebaseId ||
+                    String(c.firebaseId) === String(firebaseIdString) ||
+                    String(c.id) === String(cvId)
+                );
+                if (cvIndex >= 0) {
+                    siteData.cvDatabase.splice(cvIndex, 1);
+                    console.log('✅ [DELETE] Removed from local array at index:', cvIndex);
+                } else {
+                    console.warn('⚠️ [DELETE] CV not found in local array to remove');
+                }
+                
+                // Force re-render immediately
+                if (typeof renderAdminCvDatabase === 'function') renderAdminCvDatabase();
+                if (typeof renderRecruteurApplications === 'function') renderRecruteurApplications();
+                if (typeof renderLecteurCvDatabase === 'function') renderLecteurCvDatabase();
+                if (typeof populateCVJobFilter === 'function') populateCVJobFilter();
+                
+                showNotification('Candidature supprimée définitivement', 'success');
+                logActivity(currentUser.username, `Candidature supprimée: ${cvName}`);
+                
+                // The listener will automatically update siteData.cvDatabase when it receives the Firebase update
+                // This ensures consistency even if page is reloaded - the document will be gone from Firebase
+                return;
             } else {
                 console.error('❌ [DELETE] Firebase delete failed:', result.error);
-                // Continue with local delete even if Firebase fails
+                console.error('❌ [DELETE] Error details:', {
+                    collection: 'cvDatabase',
+                    documentId: firebaseIdString,
+                    error: result.error,
+                    userRole: currentUser?.role,
+                    userEmail: authUser?.email,
+                    userUID: authUser?.uid,
+                    isAuthenticated: !!authUser
+                });
+                
+                // Check if it's a permission error
+                if (result.error && (result.error.includes('permission') || result.error.includes('Permission') || result.error.includes('insufficient'))) {
+                    console.error('❌ [DELETE] Permission denied!');
+                    console.error('💡 [DELETE] Troubleshooting:');
+                    console.error('  1. Make sure you are logged in with Firebase Auth');
+                    console.error('  2. Check that your user document exists in /users/{uid}');
+                    console.error('  3. Verify your role is "admin", "recruiter", or "recruteur"');
+                    console.error('  4. Run: await fixUserPermissions() to fix your permissions');
+                    showNotification('Erreur de permissions: Vérifiez que vous êtes connecté et avez le rôle requis (admin/recruteur). Ouvrez la console pour plus de détails.', 'error');
+                } else {
+                    showNotification(`Erreur lors de la suppression: ${result.error}`, 'error');
+                }
+                return; // Don't delete locally if Firebase delete failed
             }
         } catch (error) {
             console.error('❌ [DELETE] Firebase delete error:', error);
-            // Continue with local delete even if Firebase fails
+            console.error('❌ [DELETE] Error stack:', error.stack);
+            console.error('❌ [DELETE] Error code:', error.code);
+            console.error('❌ [DELETE] Error message:', error.message);
+            
+            const authUser = window.firebaseServices?.auth?.currentUser;
+            console.error('❌ [DELETE] Auth state:', {
+                isAuthenticated: !!authUser,
+                userEmail: authUser?.email,
+                userUID: authUser?.uid,
+                currentUserRole: currentUser?.role
+            });
+            
+            // Check if it's a permission error
+            if (error.code === 'permission-denied' || error.message?.includes('permission') || error.message?.includes('insufficient')) {
+                console.error('❌ [DELETE] Permission denied!');
+                console.error('💡 [DELETE] Troubleshooting steps:');
+                console.error('  1. Make sure you are logged in with Firebase Auth');
+                console.error('  2. Check that your user document exists in /users/{uid} with correct role');
+                console.error('  3. Verify your role is "admin", "recruiter", or "recruteur"');
+                console.error('  4. Run in console: await fixUserPermissions()');
+                console.error('  5. Or run: await quickLogin() to log in with password');
+                showNotification('Erreur de permissions: Vérifiez votre authentification Firebase. Ouvrez la console (F12) pour plus de détails.', 'error');
+            } else {
+                showNotification(`Erreur lors de la suppression: ${error.message}`, 'error');
+            }
+            return; // Don't delete locally if Firebase delete failed
         }
     }
 
-    // Delete from local database
+    // Only delete locally if NOT in Firebase mode (localStorage mode)
+    // firebaseId is already declared above
     const cvIndex = siteData.cvDatabase.findIndex(c =>
-        c.id === cvId || c.id == cvId || String(c.id) === String(cvId) || c.firebaseId === firebaseId
+        c.id === cvId || 
+        c.id == cvId || 
+        String(c.id) === String(cvId) || 
+        c.firebaseId === firebaseId ||
+        String(c.firebaseId) === String(firebaseId) ||
+        c.firebaseId === cvId ||
+        String(c.firebaseId) === String(cvId)
     );
 
     if (cvIndex >= 0) {
@@ -8761,6 +10827,311 @@ function exportCVDatabase(format) {
     showNotification(`Base de données CV exportée (${format.toUpperCase()})`, 'success');
     logActivity(currentUser.username, `Base de données CV exportée (${format})`);
 }
+
+// ============================================
+// CV DATABASE RENDERING FUNCTIONS
+// ============================================
+
+/**
+ * Generic function to render CV database table
+ * @param {Array} cvs - Array of CV objects
+ * @param {string} containerId - Target div ID
+ * @param {string} userRole - User role ('admin', 'lecteur', 'recruteur')
+ */
+function renderCVDatabaseTable(cvs, containerId, userRole) {
+    const container = document.getElementById(containerId);
+    if (!container) {
+        console.error(`Container ${containerId} not found`);
+        return;
+    }
+
+    if (!cvs || cvs.length === 0) {
+        container.innerHTML = `
+            <div style="text-align: center; padding: var(--spacing-xl); background: var(--bg-alt); border-radius: var(--border-radius-lg); border: 2px dashed var(--border);">
+                <i class="fas fa-inbox" style="font-size: 60px; color: var(--text-light); margin-bottom: 16px;"></i>
+                <p style="font-size: var(--font-size-lg); font-weight: 600; color: var(--text-light);">Aucune candidature trouvée</p>
+                <p style="color: var(--text-light); font-size: var(--font-size-sm);">Les candidatures apparaîtront ici une fois soumises</p>
+            </div>
+        `;
+        return;
+    }
+
+    const isReadOnly = userRole === 'lecteur';
+
+    // Use Card Design (Same as Lecteur/Recruteur)
+    let html = isReadOnly ? '' : `<div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(350px, 1fr)); gap: 24px;">`;
+
+    // If not read only, use grid. If generic table needed, use table.
+    // User requested "Same design as Recruteur/Lecteur"
+    // Lecteur uses cards (seen in code at 10370)
+
+    if (userRole === 'admin') {
+        // Render as Cards for Admin too to match "Recruteur" style
+        html = `<div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(350px, 1fr)); gap: 24px;">`;
+
+        cvs.forEach(cv => {
+            const statusClass = cv.processed ? 'status-processed' : 'status-pending';
+            html += `
+                <div style="background: linear-gradient(145deg, rgba(255, 255, 255, 0.95) 0%, rgba(248, 250, 252, 0.98) 100%); 
+                    border: 2px solid var(--border); 
+                    border-radius: var(--border-radius-lg); 
+                    padding: 24px; 
+                    transition: var(--transition);
+                    box-shadow: var(--shadow-md);
+                    display: flex; flex-direction: column; justify-content: space-between;">
+                    
+                    <div>
+                        <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 16px;">
+                             <h4 style="font-weight: 800; font-size: var(--font-size-lg); display: flex; align-items: center; gap: 12px; margin: 0;">
+                                <div style="width: 40px; height: 40px; border-radius: 50%; background: var(--gradient-primary); display: flex; align-items: center; justify-content: center; color: white; font-size: 16px;">
+                                    ${(cv.applicantName || 'C').charAt(0).toUpperCase()}
+                                </div>
+                                <div>
+                                    ${cv.applicantName}
+                                    <div style="font-size: 12px; color: var(--text-light); font-weight: normal;">${new Date(cv.appliedAt || Date.now()).toLocaleDateString()}</div>
+                                </div>
+                            </h4>
+                            <span class="status-badge ${statusClass}">
+                                <i class="fas fa-${cv.processed ? 'check' : 'clock'}"></i>
+                            </span>
+                        </div>
+                        
+                        <div style="margin-bottom: 20px;">
+                            <div style="margin-bottom: 8px;">
+                                <span style="background: var(--bg-alt); padding: 4px 8px; border-radius: 4px; font-weight: 600; color: var(--primary); font-size: 14px;">
+                                    ${cv.jobTitle}
+                                </span>
+                            </div>
+                            <div style="font-size: 14px; color: var(--text-light); margin-bottom: 4px;">
+                                <i class="fas fa-envelope" style="width: 20px; text-align: center;"></i> ${cv.applicantEmail}
+                            </div>
+                            <div style="font-size: 14px; color: var(--text-light);">
+                                <i class="fas fa-phone" style="width: 20px; text-align: center;"></i> ${cv.applicantPhone || 'N/A'}
+                            </div>
+                        </div>
+                    </div>
+
+                    <div style="display: flex; gap: 8px; border-top: 1px solid var(--border); padding-top: 16px;">
+                        <button class="btn btn-sm btn-primary functional-btn" onclick="previewCV('${cv.id || cv.firebaseId || ''}')" style="flex: 1;">
+                            <i class="fas fa-eye"></i> Voir
+                        </button>
+                        <button class="btn btn-sm btn-outline functional-btn" onclick="downloadCV('${cv.id || cv.firebaseId || ''}')" title="Télécharger">
+                            <i class="fas fa-download"></i>
+                        </button>
+                        <button class="btn btn-sm btn-outline functional-btn" onclick="printCV('${cv.id || cv.firebaseId || ''}')" title="Imprimer">
+                            <i class="fas fa-print"></i>
+                        </button>
+                         ${!cv.processed ? `
+                            <button class="btn btn-sm btn-success functional-btn" onclick="markAsProcessed('${cv.id || cv.firebaseId || ''}')" title="Traiter">
+                                <i class="fas fa-check"></i>
+                            </button>
+                        ` : ''}
+                        <button class="btn btn-sm btn-danger functional-btn" onclick="deleteApplication('${cv.firebaseId || cv.id || ''}')" title="Supprimer">
+                            <i class="fas fa-trash"></i>
+                        </button>
+                    </div>
+                </div>
+            `;
+        });
+
+        html += '</div>';
+        container.innerHTML = html;
+        return;
+    }
+
+    // Default Table Render (kept for reference or other roles if needed)
+    html = `
+        <div style="overflow-x: auto; border-radius: var(--border-radius-lg); box-shadow: var(--shadow-md);">
+            <table style="width: 100%; border-collapse: collapse; background: var(--bg); border-radius: var(--border-radius-lg); overflow: hidden;">
+                <thead>
+                    <tr style="background: var(--gradient-primary); color: white;">
+                        <th style="padding: 16px; text-align: left; font-weight: 700; font-size: var(--font-size-sm);">Candidat</th>
+                        <th style="padding: 16px; text-align: left; font-weight: 700; font-size: var(--font-size-sm);">Contact</th>
+                        <th style="padding: 16px; text-align: left; font-weight: 700; font-size: var(--font-size-sm);">Poste</th>
+                        <th style="padding: 16px; text-align: left; font-weight: 700; font-size: var(--font-size-sm);">Date</th>
+                        <th style="padding: 16px; text-align: center; font-weight: 700; font-size: var(--font-size-sm);">Statut</th>
+                        <th style="padding: 16px; text-align: center; font-weight: 700; font-size: var(--font-size-sm);">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+    `;
+
+    cvs.forEach((cv, index) => {
+        const rowBg = index % 2 === 0 ? 'var(--bg)' : 'var(--bg-alt)';
+        const statusClass = cv.processed ? 'status-processed' : 'status-pending';
+        const statusText = cv.processed ? 'Traité' : 'En attente';
+        const statusColor = cv.processed ? 'var(--success)' : 'var(--warning)';
+
+        const applicantName = cv.applicantName || `${cv.applicantFirstName || ''} ${cv.applicantLastName || ''}`.trim() || 'Candidat';
+        const applicantEmail = cv.applicantEmail || cv.email || 'Non renseigné';
+        const applicantPhone = cv.applicantPhone || cv.phone || 'Non renseigné';
+        const jobTitle = cv.jobTitle || 'Poste non spécifié';
+        const appliedDate = cv.appliedAt || cv.submittedAt || cv.createdAt || Date.now();
+        const formattedDate = new Date(appliedDate).toLocaleDateString('fr-FR', {
+            day: '2-digit',
+            month: '2-digit',
+            year: 'numeric'
+        });
+
+        html += `
+            <tr style="background: ${rowBg}; border-bottom: 1px solid var(--border); transition: background 0.2s;" 
+                onmouseover="this.style.background='var(--primary-light)'; this.style.transform='scale(1.01)'" 
+                onmouseout="this.style.background='${rowBg}'; this.style.transform='scale(1)'">
+                <td style="padding: 16px;">
+                    <div style="display: flex; align-items: center; gap: 12px;">
+                        <div style="width: 40px; height: 40px; border-radius: 50%; background: var(--gradient-accent); display: flex; align-items: center; justify-content: center; color: white; font-weight: 700; font-size: var(--font-size-lg);">
+                            ${applicantName.charAt(0).toUpperCase()}
+                        </div>
+                        <div>
+                            <div style="font-weight: 600; color: var(--text);">${applicantName}</div>
+                        </div>
+                    </div>
+                </td>
+                <td style="padding: 16px;">
+                    <div style="font-size: var(--font-size-sm);">
+                        <div style="margin-bottom: 4px;"><i class="fas fa-envelope" style="color: var(--primary); margin-right: 6px;"></i>${applicantEmail}</div>
+                        <div><i class="fas fa-phone" style="color: var(--primary); margin-right: 6px;"></i>${applicantPhone}</div>
+                    </div>
+                </td>
+                <td style="padding: 16px;">
+                    <span style="color: var(--primary); font-weight: 600;">${jobTitle}</span>
+                </td>
+                <td style="padding: 16px;">
+                    <span style="color: var(--text-light); font-size: var(--font-size-sm);">${formattedDate}</span>
+                </td>
+                <td style="padding: 16px; text-align: center;">
+                    <span style="padding: 6px 12px; border-radius: var(--border-radius); background: ${statusColor}20; color: ${statusColor}; font-weight: 600; font-size: var(--font-size-xs); display: inline-block;">
+                        ${statusText}
+                    </span>
+                </td>
+                <td style="padding: 16px; text-align: center;">
+                    <div style="display: flex; gap: 8px; justify-content: center; flex-wrap: wrap;">
+                        <button class="btn btn-sm btn-primary functional-btn" onclick="previewCV('${cv.id || cv.firebaseId || ''}')" title="Voir le CV">
+                            <i class="fas fa-eye"></i>
+                        </button>
+                        <button class="btn btn-sm btn-success functional-btn" onclick="downloadCV('${cv.id || cv.firebaseId || ''}')" title="Télécharger">
+                            <i class="fas fa-download"></i>
+                        </button>
+                        <button class="btn btn-sm btn-accent functional-btn" onclick="printCV('${cv.id || cv.firebaseId || ''}')" title="Imprimer">
+                            <i class="fas fa-print"></i>
+                        </button>
+                        ${!isReadOnly && !cv.processed ? `
+                            <button class="btn btn-sm btn-info functional-btn" onclick="markAsProcessed('${cv.id || cv.firebaseId || ''}')" title="Marquer comme traité">
+                                <i class="fas fa-check"></i>
+                            </button>
+                        ` : ''}
+                        ${!isReadOnly ? `
+                            <button class="btn btn-sm btn-danger functional-btn" onclick="deleteApplication('${cv.firebaseId || cv.id || ''}')" title="Supprimer">
+                                <i class="fas fa-trash"></i>
+                            </button>
+                        ` : ''}
+                    </div>
+                </td>
+            </tr>
+        `;
+    });
+
+    html += `
+                </tbody>
+            </table>
+        </div>
+    `;
+
+    container.innerHTML = html;
+}
+
+/**
+ * Render admin CV database
+ */
+function renderAdminCvDatabase() {
+    console.log('📊 Rendering admin CV database...');
+
+    if (!siteData.cvDatabase) {
+        siteData.cvDatabase = [];
+    }
+
+    // Apply filters using getAdminFilteredCandidates
+    const filteredCvs = typeof getAdminFilteredCandidates === 'function' 
+        ? getAdminFilteredCandidates() 
+        : siteData.cvDatabase;
+    
+    renderCVDatabaseTable(filteredCvs, 'adminCvDatabase', 'admin');
+
+    // Update counter with filtered count
+    const counterElement = document.getElementById('adminFilterCountNumber');
+    if (counterElement) {
+        counterElement.textContent = filteredCvs.length;
+    }
+
+    console.log(`✅ Rendered ${filteredCvs.length} filtered CVs out of ${siteData.cvDatabase.length} total for admin`);
+}
+
+/**
+ * Render lecteur CV database
+ */
+function renderLecteurCvDatabase() {
+    console.log('📊 Rendering lecteur CV database...');
+
+    if (!siteData.cvDatabase) {
+        siteData.cvDatabase = [];
+    }
+
+    // Apply filters using getLecteurFilteredCandidates
+    const filteredCvs = typeof getLecteurFilteredCandidates === 'function' 
+        ? getLecteurFilteredCandidates() 
+        : siteData.cvDatabase;
+    
+    renderCVDatabaseTable(filteredCvs, 'lecteurCvDatabase', 'lecteur');
+
+    // Update counter with filtered count (already updated in getLecteurFilteredCandidates)
+    const counterElement = document.getElementById('lecteurFilterCountNumber');
+    if (counterElement && typeof getLecteurFilteredCandidates !== 'function') {
+        counterElement.textContent = filteredCvs.length;
+    }
+
+    console.log(`✅ Rendered ${filteredCvs.length} filtered CVs out of ${siteData.cvDatabase.length} total for lecteur`);
+}
+
+/**
+ * Render recruteur applications (if needed)
+ * This is a fallback function - the main renderRecruteurApplications() at line 10768 uses filters
+ */
+function renderRecruteurApplications() {
+    console.log('📊 Rendering recruteur applications...');
+
+    if (!siteData.cvDatabase) {
+        siteData.cvDatabase = [];
+    }
+
+    // Apply filters using getRecruteurFilteredCandidates
+    const filteredCvs = typeof getRecruteurFilteredCandidates === 'function' 
+        ? getRecruteurFilteredCandidates() 
+        : siteData.cvDatabase;
+    
+    const container = document.getElementById('recruteurCandidatures');
+
+    if (container) {
+        renderCVDatabaseTable(filteredCvs, 'recruteurCandidatures', 'recruteur');
+        
+        // Update filter count display
+        const filterCountEl = document.getElementById('recruteurFilterCountNumber');
+        if (filterCountEl) {
+            filterCountEl.textContent = filteredCvs.length;
+        }
+    }
+
+    console.log(`✅ Rendered ${filteredCvs.length} filtered applications out of ${siteData.cvDatabase.length} total for recruteur`);
+}
+
+// Expose functions globally
+window.renderAdminCvDatabase = renderAdminCvDatabase;
+window.renderLecteurCvDatabase = renderLecteurCvDatabase;
+window.renderRecruteurApplications = renderRecruteurApplications;
+window.renderCVDatabaseTable = renderCVDatabaseTable;
+
+// ============================================
+// END CV DATABASE RENDERING FUNCTIONS
+// ============================================
 
 // Settings functions OPÉRATIONNELLES
 function updateSiteInfo() {
@@ -8837,23 +11208,381 @@ function darkenColor(hex, percent) {
     return `#${((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1)}`;
 }
 
-function updateAdminProfile() {
+async function updateAdminProfile() {
     const adminUser = siteData.users.find(u => u.role === 'admin');
-    if (adminUser) {
-        const newName = document.getElementById('adminName').value;
-        const newEmail = document.getElementById('adminEmail').value;
-        const newPassword = document.getElementById('adminPassword').value;
+    if (!adminUser) {
+        showNotification('Utilisateur administrateur non trouvé', 'error');
+        return;
+    }
 
-        adminUser.username = newName;
-        adminUser.email = newEmail;
-        if (newPassword) {
-            adminUser.password = newPassword;
-        }
+    const newName = document.getElementById('adminName').value;
+    const newEmail = document.getElementById('adminEmail').value;
+    const newPassword = document.getElementById('adminPassword').value;
 
+    // Update name and email immediately (no confirmation needed)
+    adminUser.username = newName;
+    adminUser.email = newEmail;
+
+    // If password is provided, send confirmation email instead of changing directly
+    if (newPassword && newPassword.trim() !== '') {
+        await requestPasswordChangeConfirmation(adminUser.email, newPassword);
+        // Clear password field
+        document.getElementById('adminPassword').value = '';
+    } else {
+        // No password change, just update name/email
         if (saveSiteData()) {
             showNotification('Profil administrateur mis à jour', 'success');
             logActivity(currentUser.username, 'Profil administrateur modifié');
         }
+    }
+}
+
+// Request password change confirmation via email
+async function requestPasswordChangeConfirmation(adminEmail, newPassword) {
+    try {
+        console.log('🔐 [PASSWORD] Requesting password change confirmation...');
+        
+        // Generate unique confirmation token
+        const token = generateSecureToken();
+        const expiresAt = Date.now() + (30 * 60 * 1000); // 30 minutes validity
+        
+        // Store token and new password in Firebase (secure storage)
+        const confirmationData = {
+            token: token,
+            newPassword: newPassword,
+            adminEmail: adminEmail,
+            requestedAt: new Date().toISOString(),
+            expiresAt: expiresAt,
+            status: 'pending'
+        };
+        
+        // Save to Firebase
+        if (window.firebaseHelper && typeof window.firebaseHelper.addDocument === 'function') {
+            const result = await window.firebaseHelper.addDocument('passwordChangeConfirmations', confirmationData);
+            
+            if (result && result.success) {
+                console.log('✅ [PASSWORD] Confirmation token saved:', result.id);
+                
+                // Generate confirmation URL
+                const confirmationUrl = `${window.location.origin}${window.location.pathname}?confirmPasswordChange=${token}`;
+                
+                // Send confirmation email via EmailJS
+                await sendPasswordChangeConfirmationEmail(adminEmail, confirmationUrl, token);
+                
+                showNotification('Un email de confirmation a été envoyé. Vérifiez votre boîte mail.', 'info');
+                logActivity(currentUser.username, 'Demande de changement de mot de passe envoyée');
+            } else {
+                throw new Error('Failed to save confirmation token');
+            }
+        } else {
+            // Fallback: store in localStorage (less secure but works)
+            localStorage.setItem(`passwordChange_${token}`, JSON.stringify({
+                newPassword: newPassword,
+                adminEmail: adminEmail,
+                expiresAt: expiresAt
+            }));
+            
+            const confirmationUrl = `${window.location.origin}${window.location.pathname}?confirmPasswordChange=${token}`;
+            await sendPasswordChangeConfirmationEmail(adminEmail, confirmationUrl, token);
+            
+            showNotification('Un email de confirmation a été envoyé. Vérifiez votre boîte mail.', 'info');
+        }
+    } catch (error) {
+        console.error('❌ [PASSWORD] Error requesting password change:', error);
+        showNotification('Erreur lors de l\'envoi de l\'email de confirmation', 'error');
+    }
+}
+
+// Generate secure token
+function generateSecureToken() {
+    const array = new Uint8Array(32);
+    crypto.getRandomValues(array);
+    return Array.from(array, byte => byte.toString(16).padStart(2, '0')).join('');
+}
+
+// Send password change confirmation email via EmailJS
+async function sendPasswordChangeConfirmationEmail(adminEmail, confirmationUrl, token) {
+    try {
+        if (typeof emailjs === 'undefined' || !window.EMAILJS_CONFIG) {
+            throw new Error('EmailJS not configured');
+        }
+
+        const { serviceId, publicKey } = window.EMAILJS_CONFIG;
+        
+        // Use password change template if available, otherwise fallback to main template
+        const passwordTemplateId = window.EMAILJS_CONFIG.passwordChangeTemplateId || window.EMAILJS_CONFIG.templateId;
+        
+        console.log('🔐 [PASSWORD EMAIL] Using template ID:', passwordTemplateId);
+        console.log('🔐 [PASSWORD EMAIL] Password template configured:', !!window.EMAILJS_CONFIG.passwordChangeTemplateId);
+        console.log('🔐 [PASSWORD EMAIL] Main template ID:', window.EMAILJS_CONFIG.templateId);
+        
+        const subject = 'Confirmation de changement de mot de passe - AE2I';
+        
+        // Create URLs for confirm and cancel actions
+        const confirmUrl = `${window.location.origin}${window.location.pathname}?confirmPasswordChange=${token}&action=confirm`;
+        const cancelUrl = `${window.location.origin}${window.location.pathname}?confirmPasswordChange=${token}&action=cancel`;
+        
+        // EmailJS template parameters for HTML template
+        // The HTML template in EmailJS will use these variables:
+        // - {{to_name}} or {{to_email}} - Name/Email of recipient
+        // - {{confirmation_url}} - Link for "Yes" button
+        // - {{cancel_url}} - Link for "No" button
+        // - {{subject}} - Email subject (set in template)
+        // - {{email}} or {{to_email}} - Recipient email (for "To Email" field)
+        const templateParams = {
+            to_email: adminEmail,
+            email: adminEmail, // Alternative field name for EmailJS "To Email"
+            subject: subject,
+            to_name: 'Administrateur',
+            confirmation_url: confirmUrl,
+            cancel_url: cancelUrl
+        };
+
+        console.log('🔐 [PASSWORD EMAIL] Sending with params:', {
+            serviceId: serviceId,
+            templateId: passwordTemplateId,
+            to_email: adminEmail,
+            has_confirmation_url: !!confirmUrl,
+            has_cancel_url: !!cancelUrl
+        });
+
+        // Use password change template ID if configured, otherwise use main template
+        await emailjs.send(serviceId, passwordTemplateId, templateParams, publicKey);
+        console.log('✅ [PASSWORD] Confirmation email sent to:', adminEmail);
+    } catch (error) {
+        console.error('❌ [PASSWORD] Error sending confirmation email:', error);
+        throw error;
+    }
+}
+
+// Confirm password change (called when user clicks confirmation link)
+async function confirmPasswordChange(token) {
+    try {
+        console.log('🔐 [PASSWORD] Confirming password change with token:', token);
+        
+        let confirmationData = null;
+        
+        // Try to get from Firebase first
+        if (window.firebaseHelper && typeof window.firebaseHelper.queryCollection === 'function') {
+            // Query passwordChangeConfirmations collection by token
+            const queryResult = await window.firebaseHelper.queryCollection('passwordChangeConfirmations', [
+                ['token', '==', token],
+                ['status', '==', 'pending']
+            ]);
+            
+            if (queryResult && queryResult.success && queryResult.data && queryResult.data.length > 0) {
+                confirmationData = queryResult.data[0];
+                confirmationData.id = confirmationData.id; // Keep the document ID for update
+            }
+        }
+        
+        // Fallback: try localStorage
+        if (!confirmationData) {
+            const stored = localStorage.getItem(`passwordChange_${token}`);
+            if (stored) {
+                confirmationData = JSON.parse(stored);
+            }
+        }
+        
+        if (!confirmationData) {
+            showNotification('Token de confirmation invalide ou expiré', 'error');
+            return false;
+        }
+        
+        // Check if token expired
+        if (confirmationData.expiresAt && Date.now() > confirmationData.expiresAt) {
+            showNotification('Le lien de confirmation a expiré. Veuillez refaire une demande.', 'error');
+            return false;
+        }
+        
+        // Update admin password
+        const adminUser = siteData.users.find(u => u.role === 'admin');
+        if (!adminUser) {
+            showNotification('Utilisateur administrateur non trouvé', 'error');
+            return false;
+        }
+        
+        adminUser.password = confirmationData.newPassword;
+        
+        // Save to Firebase and local storage
+        if (saveSiteData()) {
+            // Mark confirmation as used in Firebase
+            if (confirmationData.id && window.firebaseHelper && typeof window.firebaseHelper.updateDocument === 'function') {
+                await window.firebaseHelper.updateDocument('passwordChangeConfirmations', confirmationData.id, {
+                    status: 'confirmed',
+                    confirmedAt: new Date().toISOString()
+                });
+            }
+            
+            // Remove from localStorage
+            localStorage.removeItem(`passwordChange_${token}`);
+            
+            showNotification('Mot de passe modifié avec succès !', 'success');
+            logActivity(adminUser.username, 'Mot de passe modifié via confirmation email');
+            
+            // Clear URL parameter
+            window.history.replaceState({}, document.title, window.location.pathname);
+            
+            return true;
+        } else {
+            showNotification('Erreur lors de la sauvegarde du nouveau mot de passe', 'error');
+            return false;
+        }
+    } catch (error) {
+        console.error('❌ [PASSWORD] Error confirming password change:', error);
+        showNotification('Erreur lors de la confirmation du changement de mot de passe', 'error');
+        return false;
+    }
+}
+
+// Check for password change confirmation on page load
+function checkPasswordChangeConfirmation() {
+    const urlParams = new URLSearchParams(window.location.search);
+    const token = urlParams.get('confirmPasswordChange');
+    const action = urlParams.get('action'); // 'confirm' or 'cancel'
+    
+    if (token) {
+        console.log('🔐 [PASSWORD] Password change confirmation token detected, action:', action);
+        
+        if (action === 'confirm') {
+            confirmPasswordChange(token);
+        } else if (action === 'cancel') {
+            cancelPasswordChange(token);
+        } else {
+            // Show confirmation page with buttons if no action specified
+            showPasswordChangeConfirmationPage(token);
+        }
+    }
+}
+
+// Show confirmation page with Yes/No buttons
+function showPasswordChangeConfirmationPage(token) {
+    // Create modal/overlay for confirmation
+    const overlay = document.createElement('div');
+    overlay.id = 'passwordChangeConfirmationOverlay';
+    overlay.style.cssText = `
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0, 0, 0, 0.7);
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        z-index: 10000;
+    `;
+    
+    const modal = document.createElement('div');
+    modal.style.cssText = `
+        background: white;
+        padding: 40px;
+        border-radius: 12px;
+        max-width: 500px;
+        width: 90%;
+        text-align: center;
+        box-shadow: 0 10px 40px rgba(0,0,0,0.3);
+    `;
+    
+    modal.innerHTML = `
+        <div style="margin-bottom: 30px;">
+            <i class="fas fa-key" style="font-size: 48px; color: #667eea; margin-bottom: 20px;"></i>
+            <h2 style="margin: 0 0 15px 0; color: #333;">Confirmation de changement de mot de passe</h2>
+            <p style="color: #666; line-height: 1.6;">
+                Une demande de changement de mot de passe a été effectuée pour votre compte administrateur.
+            </p>
+            <p style="color: #666; line-height: 1.6; margin-top: 15px;">
+                Voulez-vous confirmer ce changement ?
+            </p>
+        </div>
+        <div style="display: flex; gap: 15px; justify-content: center;">
+            <button id="confirmPasswordBtn" style="
+                padding: 14px 32px;
+                background: #28a745;
+                color: white;
+                border: none;
+                border-radius: 8px;
+                font-size: 16px;
+                font-weight: 600;
+                cursor: pointer;
+                transition: all 0.3s;
+            " onmouseover="this.style.background='#218838'" onmouseout="this.style.background='#28a745'">
+                <i class="fas fa-check"></i> Oui, confirmer
+            </button>
+            <button id="cancelPasswordBtn" style="
+                padding: 14px 32px;
+                background: #dc3545;
+                color: white;
+                border: none;
+                border-radius: 8px;
+                font-size: 16px;
+                font-weight: 600;
+                cursor: pointer;
+                transition: all 0.3s;
+            " onmouseover="this.style.background='#c82333'" onmouseout="this.style.background='#dc3545'">
+                <i class="fas fa-times"></i> Non, annuler
+            </button>
+        </div>
+    `;
+    
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+    
+    // Add event listeners
+    document.getElementById('confirmPasswordBtn').addEventListener('click', () => {
+        overlay.remove();
+        confirmPasswordChange(token);
+    });
+    
+    document.getElementById('cancelPasswordBtn').addEventListener('click', () => {
+        overlay.remove();
+        cancelPasswordChange(token);
+    });
+    
+    // Close on overlay click (outside modal)
+    overlay.addEventListener('click', (e) => {
+        if (e.target === overlay) {
+            overlay.remove();
+            cancelPasswordChange(token);
+        }
+    });
+}
+
+// Cancel password change request
+async function cancelPasswordChange(token) {
+    try {
+        console.log('🔐 [PASSWORD] Cancelling password change request, token:', token);
+        
+        // Mark confirmation as cancelled in Firebase
+        if (window.firebaseHelper && typeof window.firebaseHelper.queryCollection === 'function') {
+            const queryResult = await window.firebaseHelper.queryCollection('passwordChangeConfirmations', [
+                ['token', '==', token],
+                ['status', '==', 'pending']
+            ]);
+            
+            if (queryResult && queryResult.success && queryResult.data && queryResult.data.length > 0) {
+                const confirmationData = queryResult.data[0];
+                
+                if (confirmationData.id && window.firebaseHelper && typeof window.firebaseHelper.updateDocument === 'function') {
+                    await window.firebaseHelper.updateDocument('passwordChangeConfirmations', confirmationData.id, {
+                        status: 'cancelled',
+                        cancelledAt: new Date().toISOString()
+                    });
+                }
+            }
+        }
+        
+        // Remove from localStorage
+        localStorage.removeItem(`passwordChange_${token}`);
+        
+        // Clear URL parameters
+        window.history.replaceState({}, document.title, window.location.pathname);
+        
+        showNotification('Demande de changement de mot de passe annulée', 'info');
+        console.log('✅ [PASSWORD] Password change request cancelled');
+    } catch (error) {
+        console.error('❌ [PASSWORD] Error cancelling password change:', error);
+        showNotification('Erreur lors de l\'annulation', 'error');
     }
 }
 
@@ -9168,9 +11897,13 @@ async function loadCandidaturesFromFirebase() {
 }
 
 function renderRecruteurContent() {
-    // Update recruiter stats - Show ALL candidatures (not just recruiter's jobs)
-    const myJobs = siteData.jobs.filter(j => j.createdBy === currentUser.username);
-    const allApplications = siteData.cvDatabase || [];
+    // Filter applications: Only show CVs for jobs created by this recruiter
+    const myJobIds = myJobs.map(j => j.id);
+    const allApplications = (siteData.cvDatabase || []).filter(cv => myJobIds.includes(cv.jobId));
+
+    // Debug
+    console.log('📊 [RECRUTEUR] My Jobs IDs:', myJobIds);
+    console.log('📊 [RECRUTEUR] Filtered applications:', allApplications.length);
 
     console.log('📊 [RECRUTEUR] My jobs:', myJobs.length, myJobs.map(j => ({ id: j.id, title: j.title.fr })));
     console.log('📊 [RECRUTEUR] All candidatures:', allApplications.length);
@@ -9548,14 +12281,20 @@ function getRecruteurFilteredCandidates() {
     // Show ALL candidatures, not just recruiter's jobs
     let candidates = siteData.cvDatabase || [];
 
-    // Barre de recherche
+    // Barre de recherche - recherche dans plusieurs champs
     const searchTerm = document.getElementById('recruteurSearchBar')?.value.toLowerCase() || '';
     if (searchTerm) {
         candidates = candidates.filter(cv =>
             cv.applicantName?.toLowerCase().includes(searchTerm) ||
+            cv.applicantFirstName?.toLowerCase().includes(searchTerm) ||
+            cv.applicantLastName?.toLowerCase().includes(searchTerm) ||
+            cv.applicantEmail?.toLowerCase().includes(searchTerm) ||
+            cv.applicantPhone?.toLowerCase().includes(searchTerm) ||
             cv.jobTitle?.toLowerCase().includes(searchTerm) ||
             cv.diplome?.toLowerCase().includes(searchTerm) ||
-            cv.domaine?.toLowerCase().includes(searchTerm)
+            cv.domaine?.toLowerCase().includes(searchTerm) ||
+            cv.applicantDiploma?.toLowerCase().includes(searchTerm) ||
+            cv.wilaya?.toLowerCase().includes(searchTerm)
         );
     }
 
@@ -9936,8 +12675,21 @@ function deleteRecruteurJob(jobId) {
 
 function executeLecteurScript() {
     console.log('👁️ Executing lecteur dashboard script');
-    renderLecteurContent();
-    setupLecteurInteractions();
+
+    // Load candidatures from Firebase if in Firebase mode
+    if (APP_MODE === 'FIREBASE' && window.firebaseHelper) {
+        loadCandidaturesFromFirebase().then(() => {
+            renderLecteurContent();
+            setupLecteurInteractions(); // Setup filter interactions
+        }).catch(err => {
+            console.error('Error loading candidatures:', err);
+            renderLecteurContent();
+            setupLecteurInteractions(); // Setup filter interactions
+        });
+    } else {
+        renderLecteurContent();
+        setupLecteurInteractions(); // Setup filter interactions
+    }
 }
 
 function renderLecteurContent() {
@@ -9971,14 +12723,20 @@ function applyLecteurFilters() {
 function getLecteurFilteredCandidates() {
     let candidates = siteData.cvDatabase || [];
 
-    // Barre de recherche
+    // Barre de recherche - recherche dans plusieurs champs
     const searchTerm = document.getElementById('lecteurSearchBar')?.value.toLowerCase() || '';
     if (searchTerm) {
         candidates = candidates.filter(cv =>
             cv.applicantName?.toLowerCase().includes(searchTerm) ||
+            cv.applicantFirstName?.toLowerCase().includes(searchTerm) ||
+            cv.applicantLastName?.toLowerCase().includes(searchTerm) ||
+            cv.applicantEmail?.toLowerCase().includes(searchTerm) ||
+            cv.applicantPhone?.toLowerCase().includes(searchTerm) ||
             cv.jobTitle?.toLowerCase().includes(searchTerm) ||
             cv.diplome?.toLowerCase().includes(searchTerm) ||
-            cv.domaine?.toLowerCase().includes(searchTerm)
+            cv.domaine?.toLowerCase().includes(searchTerm) ||
+            cv.applicantDiploma?.toLowerCase().includes(searchTerm) ||
+            cv.wilaya?.toLowerCase().includes(searchTerm)
         );
     }
 
@@ -10945,23 +13703,40 @@ function applyCustomSettings() {
         }
     }
 
+    // FIX: Apply footer background with better error handling
     if (siteData.footerBackground) {
         const footerBackground = document.getElementById('footerBackground');
-        if (siteData.footerBackground.type === 'gradient') {
-            footerBackground.style.background = siteData.footerBackground.gradient;
-        } else if (siteData.footerBackground.type === 'image') {
-            footerBackground.style.backgroundImage = `url(${siteData.footerBackground.url})`;
-            footerBackground.classList.add('has-image');
-        } else if (siteData.footerBackground.type === 'video') {
-            const footerVideo = document.getElementById('footerVideo');
-            const footerVideoSource = document.getElementById('footerVideoSource');
-            if (footerVideo && footerVideoSource) {
-                footerVideoSource.src = siteData.footerBackground.url;
-                footerVideo.load();
-                footerVideo.style.display = 'block';
-                footerBackground.classList.add('has-video');
+        if (footerBackground) {
+            if (siteData.footerBackground.type === 'gradient') {
+                footerBackground.style.background = siteData.footerBackground.gradient;
+                footerBackground.classList.remove('has-image', 'has-video');
+            } else if (siteData.footerBackground.type === 'image') {
+                footerBackground.style.backgroundImage = `url(${siteData.footerBackground.url})`;
+                footerBackground.style.backgroundSize = 'cover';
+                footerBackground.style.backgroundPosition = 'center';
+                footerBackground.classList.add('has-image');
+                footerBackground.classList.remove('has-video');
+            } else if (siteData.footerBackground.type === 'video') {
+                const footerVideo = document.getElementById('footerVideo');
+                const footerVideoSource = document.getElementById('footerVideoSource');
+                if (footerVideo && footerVideoSource) {
+                    footerVideoSource.src = siteData.footerBackground.url;
+                    footerVideo.load();
+                    footerVideo.style.display = 'block';
+                    footerBackground.classList.add('has-video');
+                    footerBackground.classList.remove('has-image');
+                }
+            } else if (siteData.footerBackground.gradient) {
+                // Fallback: if gradient property exists directly
+                footerBackground.style.background = siteData.footerBackground.gradient;
+                footerBackground.classList.remove('has-image', 'has-video');
             }
+            console.log('✅ [APPLY] Footer background applied:', siteData.footerBackground.type || 'gradient');
+        } else {
+            console.warn('⚠️ [APPLY] Footer background element not found');
         }
+    } else {
+        console.log('ℹ️ [APPLY] No footer background configured');
     }
 
     // Vérifier le mode maintenance
@@ -11269,6 +14044,9 @@ window.openJobModal = openJobModal;
 window.openClientModal = openClientModal;
 window.openPageModal = openPageModal;
 window.openApplicationForm = openApplicationForm;
+window.handleMaintenanceLogin = handleMaintenanceLogin;
+window.disableMaintenanceMode = disableMaintenanceMode;
+window.logoutFromMaintenance = logoutFromMaintenance;
 window.exportAllCVs = exportAllCVs;
 window.exportCVDatabase = exportCVDatabase;
 window.exportAnalytics = exportAnalytics;
@@ -11354,9 +14132,7 @@ function loadSocialNetworkStates() {
     });
 }
 
-function toggleSocialNetworks(toggleElement) {
-    toggleElement.classList.toggle('active');
-}
+// REMOVED: Duplicate toggleSocialNetworks function - using the complete one at line 6337
 
 function applySocialsSettings() {
     const socialsToggle = document.getElementById('socialsToggle');
@@ -11381,32 +14157,80 @@ function applySocialsSettings() {
 
 /* ADD: socials-visibility-update - Apply social networks visibility */
 function applySocialsVisibility(enabled) {
-    const socialElements = document.querySelectorAll('.footer-social-links, [class*="social"]');
-    socialElements.forEach(el => {
-        if (enabled) {
-            el.style.display = '';
-        } else {
-            el.style.display = 'none';
+    console.log('🔄 [SOCIALS VISIBILITY] Applying visibility:', enabled);
+    
+    // FIX: Apply to footer social links container (id="footerSocialLinks")
+    const footerSocialLinks = document.getElementById('footerSocialLinks');
+    if (footerSocialLinks) {
+        footerSocialLinks.style.display = enabled ? 'flex' : 'none';
+        console.log('✅ [SOCIALS VISIBILITY] Footer social links container updated');
+        
+        // Also hide/show all child elements
+        const childButtons = footerSocialLinks.querySelectorAll('.social-btn, [data-network]');
+        childButtons.forEach(btn => {
+            btn.style.display = enabled ? '' : 'none';
+        });
+    } else {
+        console.warn('⚠️ [SOCIALS VISIBILITY] footerSocialLinks element not found');
+    }
+    
+    // Apply to all social network buttons with data-network attribute (but not toggle switches)
+    const socialButtons = document.querySelectorAll('[data-network]');
+    let buttonsUpdated = 0;
+    socialButtons.forEach(el => {
+        // Don't hide toggle switches, only actual links
+        if (!el.classList.contains('toggle-switch') && el.tagName === 'A') {
+            el.style.display = enabled ? '' : 'none';
+            buttonsUpdated++;
         }
     });
+    console.log(`✅ [SOCIALS VISIBILITY] ${buttonsUpdated} social buttons with data-network updated`);
+    
+    // Apply to ALL social-btn class elements (including those in footer)
+    const socialBtnElements = document.querySelectorAll('.social-btn');
+    let socialBtnUpdated = 0;
+    socialBtnElements.forEach(el => {
+        // Don't hide toggle switches or elements in admin panels
+        if (!el.classList.contains('toggle-switch') && !el.closest('.admin-card')) {
+            el.style.display = enabled ? '' : 'none';
+            socialBtnUpdated++;
+        }
+    });
+    console.log(`✅ [SOCIALS VISIBILITY] ${socialBtnUpdated} .social-btn elements updated`);
+    
+    // Apply to footer-social class containers
+    const footerSocialContainers = document.querySelectorAll('.footer-social');
+    footerSocialContainers.forEach(el => {
+        el.style.display = enabled ? 'flex' : 'none';
+    });
+    
+    // Also apply to any other social network containers (but be careful not to hide admin toggles)
+    const socialContainers = document.querySelectorAll('.social-networks, .social-links');
+    socialContainers.forEach(el => {
+        // Only apply to containers in footer/public areas, not admin panels
+        if (!el.closest('.admin-card') && !el.classList.contains('toggle-switch')) {
+            el.style.display = enabled ? '' : 'none';
+        }
+    });
+    
+    console.log('✅ [SOCIALS VISIBILITY] Visibility applied to all elements');
 }
 
 /* ADD: admin-toggle-socials-persistence - Initialize socials state on page load */
 function initializeSocialsState() {
     if (!siteData.settings) siteData.settings = {};
 
+    // FIX: Use socialNetworksEnabled instead of socialsEnabled for consistency
     // Default to enabled if not set
-    if (siteData.settings.socialsEnabled === undefined) {
-        siteData.settings.socialsEnabled = true;
-    }
+    const isEnabled = siteData.settings.socialNetworksEnabled !== false; // Default to true
 
     // Apply visibility based on saved state
-    applySocialsVisibility(siteData.settings.socialsEnabled);
+    applySocialsVisibility(isEnabled);
 
     // Update toggle button in admin if it exists
     const socialsToggle = document.getElementById('socialsToggle');
     if (socialsToggle) {
-        if (siteData.settings.socialsEnabled) {
+        if (isEnabled) {
             socialsToggle.classList.add('active');
         } else {
             socialsToggle.classList.remove('active');
@@ -11961,8 +14785,14 @@ window.addEventListener('firebaseReady', () => {
 
             // Convertir les timestamps Firebase en dates et normaliser champs attendus par siteData
             const normalized = docs.map(doc => {
-                const d = { id: doc.id, ...doc.data ? doc.data() : doc };
-                console.log('🔄 [NORMALIZE] Processing doc ID:', doc.id, 'Original fields:', Object.keys(d));
+                // firebase.js listener now sends: { ...docData, id: doc.id }
+                // So doc.id is ALWAYS the Firebase document ID (it overwrites any id in docData)
+                const firebaseDocId = doc.id;
+                
+                // Use doc as-is (it already has the correct Firebase ID)
+                const d = { ...doc };
+                
+                console.log('🔄 [NORMALIZE] Processing doc ID:', firebaseDocId, 'Type:', typeof firebaseDocId);
 
                 // serverTimestamp fields -> convertir si nécessaire
                 if (d.submittedAt && d.submittedAt.toDate) {
@@ -12031,8 +14861,11 @@ window.addEventListener('firebaseReady', () => {
                 // processed flag
                 d.processed = !!d.processed;
 
-                // Store Firebase ID for deletion
-                d.firebaseId = doc.id;
+                // Store Firebase ID for deletion (always use the Firebase document ID)
+                // Both id and firebaseId should be the Firebase document ID
+                d.firebaseId = firebaseDocId;
+                // Ensure id is also the Firebase document ID (in case data had a different id)
+                d.id = firebaseDocId;
 
                 return d;
             });
@@ -12078,6 +14911,49 @@ window.addEventListener('firebaseReady', () => {
                 console.error('Erreur lors du re-render après sync CV:', e);
             }
         }, [ /* optional query constraints */]);
+        
+        // Listen to settings collection for real-time updates (including recruitmentEmails)
+        window.firebaseHelper.listenToCollection('settings', function (docs) {
+            console.log('🔁 [FIREBASE LISTENER] Settings snapshot reçu, count =', docs.length);
+            
+            if (docs.length > 0) {
+                // Find the 'main' settings document
+                const mainSettings = docs.find(doc => doc.id === 'main');
+                if (mainSettings) {
+                    console.log('✅ [SETTINGS LISTENER] Main settings loaded');
+                    
+                    // Update siteData.settings
+                    if (!siteData.settings) {
+                        siteData.settings = {};
+                    }
+                    
+                    // Merge settings (preserve recruitmentEmails array)
+                    Object.keys(mainSettings).forEach(key => {
+                        if (key !== 'id' && key !== 'lastUpdated' && key !== 'updatedBy' && key !== 'updatedByUid') {
+                            if (Array.isArray(mainSettings[key])) {
+                                // Always use Firebase version for arrays
+                                siteData.settings[key] = mainSettings[key];
+                            } else {
+                                siteData.settings[key] = mainSettings[key];
+                            }
+                        }
+                    });
+                    
+                    // Ensure recruitmentEmails is preserved
+                    if (mainSettings.recruitmentEmails && Array.isArray(mainSettings.recruitmentEmails)) {
+                        siteData.settings.recruitmentEmails = mainSettings.recruitmentEmails;
+                        console.log('✅ [SETTINGS LISTENER] Recruitment emails updated:', mainSettings.recruitmentEmails.length, mainSettings.recruitmentEmails);
+                        
+                        // Re-render recruitment emails if admin page is active
+                        if (currentUser && currentUser.role === 'admin') {
+                            if (typeof renderRecruitmentEmails === 'function') {
+                                renderRecruitmentEmails();
+                            }
+                        }
+                    }
+                }
+            }
+        });
     } else {
         console.warn('⚠️ firebaseHelper.listenToCollection non disponible');
     }
@@ -13110,10 +15986,12 @@ window.deleteMultipleCandidatures = async function (cvIds) {
             }
 
             const firebaseId = cv.firebaseId || cv.id;
+            // Convert to string - Firebase requires string IDs
+            const firebaseIdString = String(firebaseId);
 
             // Delete from Firebase
-            if (APP_MODE === 'FIREBASE' && window.firebaseHelper && firebaseId) {
-                const result = await window.firebaseHelper.deleteDocument('cvDatabase', firebaseId);
+            if (APP_MODE === 'FIREBASE' && window.firebaseHelper && firebaseIdString) {
+                const result = await window.firebaseHelper.deleteDocument('cvDatabase', firebaseIdString);
                 if (!result.success) {
                     console.error(`❌ [BULK DELETE] Failed to delete ${firebaseId}:`, result.error);
                     errors.push({ id: firebaseId, error: result.error });

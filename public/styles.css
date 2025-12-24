@@ -8079,9 +8079,37 @@
             text-align: center;
             padding: var(--spacing-xl);
         }
+        
+        .page-section#maintenance-page.active {
+            display: flex !important;
+        }
 
         .maintenance-content {
             max-width: 600px;
+            width: 100%;
+        }
+        
+        #maintenanceAdminLogin,
+        #maintenanceAdminPanel {
+            position: relative;
+            z-index: 1000;
+        }
+        
+        #maintenanceAdminLogin input,
+        #maintenanceAdminPanel input {
+            color: #000 !important;
+        }
+        
+        #maintenanceAdminLogin button,
+        #maintenanceAdminPanel button {
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        
+        #maintenanceAdminLogin button:hover,
+        #maintenanceAdminPanel button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
         }
 
         .maintenance-icon {
@@ -8108,4 +8136,35 @@
             opacity: 0.8;
             font-style: italic;
         }
+
+/* Scroll to Top Button */
+#btn-back-to-top {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    display: none;
+    z-index: 1000;
+    width: 50px;
+    height: 50px;
+    border-radius: 50%;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    transition: all 0.3s ease;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    background: var(--primary); /* Fallback */
+    color: white;
+    border: none;
+    cursor: pointer;
+}
+
+#btn-back-to-top:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 6px 16px rgba(0,0,0,0.2);
+    background: var(--primary-dark);
+}
+
+#btn-back-to-top i {
+    font-size: 1.2rem;
+}
     

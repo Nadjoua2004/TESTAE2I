@@ -58,9 +58,10 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
-    // Site Data - Full site data storage (admin only for write, authenticated read)
+    // Site Data - Full site data storage (admin only for write, public read for main document)
     match /siteData/{documentId} {
-      allow read: if isAuthenticated(); // Authenticated users can read
+      // Allow public read for main document (for public site display), authenticated read for others
+      allow read: if documentId == 'main' || isAuthenticated();
       allow write: if isAdmin(); // Only admin can write
     }
 
@@ -160,6 +161,18 @@ service cloud.firestore {
     match /trash/{trashId} {
       allow read, update, delete: if isAdmin();
       allow create: if isAuthenticated();
+    }
+
+    // Password Change Confirmations - Authenticated users can create and read/update their own
+    match /passwordChangeConfirmations/{confirmationId} {
+      // Allow create if authenticated (for requesting password change)
+      allow create: if isAuthenticated();
+      // Allow read if authenticated (users can read their own confirmations via query)
+      allow read: if isAuthenticated();
+      // Allow update if authenticated (for confirming password change)
+      allow update: if isAuthenticated();
+      // Only admin can delete
+      allow delete: if isAdmin();
     }
   }
 }
